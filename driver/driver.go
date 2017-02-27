@@ -1,10 +1,7 @@
-//
-// Rudimentary program for examining Android APK files. An APK file
-// is basically a ZIP file that contains an Android manifest and a series
-// of DEX files, strings, resources, bitmaps, and assorted other items.
-// This specific reader looks only at the DEX files, not the other
-// bits and pieces.
-//
+// Program to generate test files for C ABI testing (insure that the
+// compiler is putting things in registers or memory and/or casting
+// as appropriate).
+
 package main
 
 import (
