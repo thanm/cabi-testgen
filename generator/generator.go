@@ -16,6 +16,12 @@ type TunableParams struct {
 	// between 0 and N returns
 	nReturnRange uint8
 
+	// structs have between 0 and N members
+	nStructFields uint8
+
+	// arrays have between 0 and N elements
+	nArrayElements uint8
+
 	// Controls how often ints wind up as 8/16/32/64, should
 	// add up to 100. Ex: 100 0 0 0 means all ints are 8 bit,
 	// 25 25 25 25 means equal likelihood of all types.
@@ -31,21 +37,22 @@ type TunableParams struct {
 	structDepth uint8
 
 	// Fraction of param and return types assigned to each
-	// category: struct/int/float/bool/pointer/array at the top
+	// category: struct/array/int/float/pointer at the top
 	// level. If nesting precludes using a struct, other types
 	// are chosen from instead according to same proportions.
-	typeFractions [6]uint8
+	typeFractions [5]uint8
 }
 
 var tunables = TunableParams{
 	nParmRange:     20,
 	nReturnRange:   10,
+	nStructFields:  5,
+	nArrayElements: 5,
 	intBitRanges:   [4]uint8{30, 20, 20, 30},
 	floatBitRanges: [2]uint8{50, 50},
 	unsignedRanges: [2]uint8{50, 50},
 	structDepth:    2,
-	//typeFractions:  {30, 20, 20, 5, 15, 10},
-	typeFractions: [6]uint8{40, 30, 30, 0, 0, 0},
+	typeFractions:  [5]uint8{35, 15, 30, 20, 0},
 }
 
 func DefaultTunables() TunableParams {
@@ -92,6 +99,18 @@ func SetTunables(t TunableParams) {
 	tunables = t
 }
 
+func writeCom(outf *os.File, i int) {
+	if i != 0 {
+		fmt.Fprintf(outf, ", ")
+	}
+}
+
+func bufCom(buf *bytes.Buffer, i int) {
+	if i != 0 {
+		buf.WriteString(", ")
+	}
+}
+
 var Verbctl int = 0
 
 func verb(vlevel int, s string, a ...interface{}) {
@@ -102,16 +121,18 @@ func verb(vlevel int, s string, a ...interface{}) {
 }
 
 type parm interface {
+	TypeName() string
 	Declare(outf *os.File, prefix string, suffix string, parmNo int)
-	CallerSetInitValue(outf *os.File, parmNo int, value int) int
 	GenValue(value int) (string, int)
-	//CheckerParam()
-	//CheckerCheckValue(parmNo int, value int)
 }
 
 type numparm struct {
 	tag         string
 	widthInBits int
+}
+
+func (p numparm) TypeName() string {
+	return fmt.Sprintf("%s%d", p.tag, p.widthInBits)
 }
 
 func (p numparm) Declare(outf *os.File, prefix string, suffix string, parmNo int) {
@@ -132,31 +153,17 @@ func (p numparm) GenValue(value int) (string, int) {
 	return s, value + 1
 }
 
-func (p numparm) CallerSetInitValue(outf *os.File, parmNo int, value int) int {
-	valstr, value := p.GenValue(value)
-	fmt.Fprintf(outf, "p%d = %s\n", parmNo, valstr)
-	return value
-}
-
 type structparm struct {
 	sname  string
 	fields []parm
 }
 
+func (p structparm) TypeName() string {
+	return p.sname
+}
+
 func (p structparm) Declare(outf *os.File, prefix string, suffix string, parmNo int) {
 	fmt.Fprintf(outf, "%s%d %s%s", prefix, parmNo, p.sname, suffix)
-}
-
-func writeCom(outf *os.File, i int) {
-	if i != 0 {
-		fmt.Fprintf(outf, ", ")
-	}
-}
-
-func bufCom(buf *bytes.Buffer, i int) {
-	if i != 0 {
-		buf.WriteString(", ")
-	}
 }
 
 func (p structparm) GenValue(value int) (string, int) {
@@ -173,15 +180,39 @@ func (p structparm) GenValue(value int) (string, int) {
 	return buf.String(), value
 }
 
-func (p structparm) CallerSetInitValue(outf *os.File, parmNo int, value int) int {
-	valstr, value := p.GenValue(value)
-	fmt.Fprintf(outf, "p%d = %s\n", parmNo, valstr)
-	return value
+type arrayparm struct {
+	aname     string
+	nelements uint8
+	eltype    parm
+}
+
+func (p arrayparm) TypeName() string {
+	return p.aname
+}
+
+func (p arrayparm) Declare(outf *os.File, prefix string, suffix string, parmNo int) {
+
+	fmt.Fprintf(outf, "%s%d %s%s", prefix, parmNo, p.aname, suffix)
+}
+
+func (p arrayparm) GenValue(value int) (string, int) {
+	var buf bytes.Buffer
+
+	buf.WriteString(fmt.Sprintf("%s{", p.aname))
+	for i := 0; i < int(p.nelements); i++ {
+		var valstr string
+		valstr, value = p.eltype.GenValue(value)
+		bufCom(&buf, i)
+		buf.WriteString(valstr)
+	}
+	buf.WriteString("}")
+	return buf.String(), value
 }
 
 type funcdef struct {
 	idx        int
 	structdefs []*structparm
+	arraydefs  []*arrayparm
 	params     []parm
 	returns    []parm
 }
@@ -218,20 +249,24 @@ func floatBits() int {
 
 func GenParm(f *funcdef, depth int) parm {
 
-	// Enforcement for struct nesting depth
+	// Enforcement for struct or array nesting depth
 	tf := tunables.typeFractions
 	amt := 100
 	off := uint8(0)
 	toodeep := depth >= int(tunables.structDepth)
 	if toodeep {
-		off = tf[0]
+		off = tf[0] + tf[1]
 		amt -= int(off)
 		tf[0] = 0
+		tf[1] = 0
 	}
-	s := off
+	s := uint8(0)
 	for i := 0; i < len(tf); i++ {
 		tf[i] += s
 		s += tf[i]
+	}
+	for i := 2; i < len(tf); i++ {
+		tf[i] += off
 	}
 
 	// Make adjusted selection
@@ -246,7 +281,7 @@ func GenParm(f *funcdef, depth int) parm {
 			ns := len(f.structdefs)
 			sp.sname = fmt.Sprintf("StructF%dS%d", f.idx, ns)
 			f.structdefs = append(f.structdefs, sp)
-			nf := rand.Intn(7)
+			nf := rand.Intn(int(tunables.nStructFields))
 			for fi := 0; fi < nf; fi++ {
 				sp.fields = append(sp.fields, GenParm(f, depth+1))
 			}
@@ -254,29 +289,31 @@ func GenParm(f *funcdef, depth int) parm {
 		}
 	case which < tf[1]:
 		{
+			ap := new(arrayparm)
+			ns := len(f.arraydefs)
+			ap.aname = fmt.Sprintf("ArrayF%dS%d", f.idx, ns)
+			f.arraydefs = append(f.arraydefs, ap)
+			ap.nelements = uint8(rand.Intn(int(tunables.nArrayElements)))
+			ap.eltype = GenParm(f, depth+1)
+			return ap
+		}
+	case which < tf[2]:
+		{
 			var ip numparm
 			ip.tag = intFlavor()
 			ip.widthInBits = intBits()
 			return ip
 		}
-	case which < tf[2]:
+	case which < tf[3]:
 		{
 			var fp numparm
 			fp.tag = "float"
 			fp.widthInBits = floatBits()
 			return fp
 		}
-	case which < tf[3]:
-		{
-			panic("not yet implemented")
-		}
 	case which < tf[4]:
 		{
-			panic("not yet implemented")
-		}
-	case which < tf[5]:
-		{
-			panic("not yet implemented")
+			panic("pointers not yet implemented")
 		}
 	}
 
@@ -305,13 +342,17 @@ func GenFunc(fidx int) funcdef {
 	return f
 }
 
-func emitStructDefs(f *funcdef, outf *os.File) {
+func emitStructAndArrayDefs(f *funcdef, outf *os.File) {
 	for _, s := range f.structdefs {
 		fmt.Fprintf(outf, "type %s struct {\n", s.sname)
 		for fi, sp := range s.fields {
 			sp.Declare(outf, "F", "\n", fi)
 		}
 		fmt.Fprintf(outf, "}\n\n")
+	}
+	for _, a := range f.arraydefs {
+		fmt.Fprintf(outf, "type %s [%d]%s\n\n", a.aname,
+			a.nelements, a.eltype.TypeName())
 	}
 }
 
@@ -321,7 +362,9 @@ func emitCaller(f *funcdef, outf *os.File) {
 	var value int = 1
 	for pi, p := range f.params {
 		p.Declare(outf, "var p", "\n", pi)
-		value = p.CallerSetInitValue(outf, pi, value)
+		var valstr string
+		valstr, value = p.GenValue(value)
+		fmt.Fprintf(outf, "p%d = %s\n", pi, valstr)
 	}
 
 	// calling code
@@ -356,7 +399,7 @@ func emitCaller(f *funcdef, outf *os.File) {
 }
 
 func emitChecker(f *funcdef, outf *os.File) {
-	emitStructDefs(f, outf)
+	emitStructAndArrayDefs(f, outf)
 	fmt.Fprintf(outf, "// %d returns %d params\n", len(f.returns), len(f.params))
 	fmt.Fprintf(outf, "func Test%d(", f.idx)
 
