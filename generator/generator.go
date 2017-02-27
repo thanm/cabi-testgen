@@ -51,7 +51,7 @@ var tunables = TunableParams{
 	intBitRanges:   [4]uint8{30, 20, 20, 30},
 	floatBitRanges: [2]uint8{50, 50},
 	unsignedRanges: [2]uint8{50, 50},
-	structDepth:    2,
+	structDepth:    1,
 	typeFractions:  [5]uint8{35, 15, 30, 20, 0},
 }
 
