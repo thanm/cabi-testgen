@@ -81,7 +81,7 @@ func main() {
 	flag.Parse()
 	generator.Verbctl = *verbflag
 	rand.Seed(*seedflag)
-	verb(1, "in main")
+	verb(1, "in main verblevel=%d", *verbflag)
 	verb(1, "seed is %d", *seedflag)
 	if flag.NArg() != 0 {
 		usage("unknown extra arguments")

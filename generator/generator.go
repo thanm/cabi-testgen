@@ -2,10 +2,95 @@ package generator
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"log"
 	"math/rand"
 	"os"
 )
+
+type TunableParams struct {
+	// between 0 and N params
+	nParmRange uint8
+
+	// between 0 and N returns
+	nReturnRange uint8
+
+	// Controls how often ints wind up as 8/16/32/64, should
+	// add up to 100. Ex: 100 0 0 0 means all ints are 8 bit,
+	// 25 25 25 25 means equal likelihood of all types.
+	intBitRanges [4]uint8
+
+	// Similar to the above but for 32/64 float types
+	floatBitRanges [2]uint8
+
+	// Similar to the above but for unsigned, signed ints.
+	unsignedRanges [2]uint8
+
+	// How deeply structs are allowed to be nested.
+	structDepth uint8
+
+	// Fraction of param and return types assigned to each
+	// category: struct/int/float/bool/pointer/array at the top
+	// level. If nesting precludes using a struct, other types
+	// are chosen from instead according to same proportions.
+	typeFractions [6]uint8
+}
+
+var tunables = TunableParams{
+	nParmRange:     20,
+	nReturnRange:   10,
+	intBitRanges:   [4]uint8{30, 20, 20, 30},
+	floatBitRanges: [2]uint8{50, 50},
+	unsignedRanges: [2]uint8{50, 50},
+	structDepth:    2,
+	//typeFractions:  {30, 20, 20, 5, 15, 10},
+	typeFractions: [6]uint8{40, 30, 30, 0, 0, 0},
+}
+
+func DefaultTunables() TunableParams {
+	return tunables
+}
+
+func checkTunables(t TunableParams) {
+	var s int = 0
+
+	for _, v := range t.intBitRanges {
+		s += int(v)
+	}
+	if s != 100 {
+		log.Fatal(errors.New("intBitRanges tunable does not sum to 100"))
+	}
+
+	s = 0
+	for _, v := range t.unsignedRanges {
+		s += int(v)
+	}
+	if s != 100 {
+		log.Fatal(errors.New("unsignedRanges tunable does not sum to 100"))
+	}
+
+	s = 0
+	for _, v := range t.floatBitRanges {
+		s += int(v)
+	}
+	if s != 100 {
+		log.Fatal(errors.New("floatBitRanges tunable does not sum to 100"))
+	}
+
+	s = 0
+	for _, v := range t.typeFractions {
+		s += int(v)
+	}
+	if s != 100 {
+		log.Fatal(errors.New("typeFractions tunable does not sum to 100"))
+	}
+}
+
+func SetTunables(t TunableParams) {
+	checkTunables(t)
+	tunables = t
+}
 
 var Verbctl int = 0
 
@@ -35,10 +120,14 @@ func (p numparm) Declare(outf *os.File, prefix string, suffix string, parmNo int
 
 func (p numparm) GenValue(value int) (string, int) {
 	var s string
+	v := value
+	if p.tag == "int" && v%2 != 0 {
+		v = -v
+	}
 	if p.tag == "complex" {
 		s = fmt.Sprintf("complex(%d, %d)", value, value)
 	} else {
-		s = fmt.Sprintf("%s%d(%d)", p.tag, p.widthInBits, value)
+		s = fmt.Sprintf("%s%d(%d)", p.tag, p.widthInBits, v)
 	}
 	return s, value + 1
 }
@@ -97,58 +186,105 @@ type funcdef struct {
 	returns    []parm
 }
 
-func intBits() int {
-	which := rand.Intn(10)
-	switch which {
-	case 0, 1, 2, 3:
-		return 8
-	case 4, 5:
-		return 16
-	case 6, 7:
-		return 32
-	case 8, 9, 10:
-		return 64
+func intFlavor() string {
+	which := uint8(rand.Intn(100))
+	if which < tunables.unsignedRanges[0] {
+		return "uint"
 	}
-	return 0
+	return "int"
+}
+
+func intBits() int {
+	which := uint8(rand.Intn(100))
+	var t uint8 = 0
+	var bits int = 8
+	for _, v := range tunables.intBitRanges {
+		t += v
+		if which < t {
+			return bits
+		}
+		bits *= 2
+	}
+	return int(tunables.intBitRanges[3])
 }
 
 func floatBits() int {
-	which := rand.Intn(10)
-	if which > 5 {
+	which := uint8(rand.Intn(100))
+	if which < tunables.floatBitRanges[0] {
 		return 32
 	}
 	return 64
 }
 
 func GenParm(f *funcdef, depth int) parm {
-	which := rand.Intn(20)
-	if depth == 0 && which < 5 {
-		sp := new(structparm)
-		ns := len(f.structdefs)
-		sp.sname = fmt.Sprintf("StructF%dS%d", f.idx, ns)
-		f.structdefs = append(f.structdefs, sp)
-		nf := rand.Intn(7)
-		for fi := 0; fi < nf; fi++ {
-			sp.fields = append(sp.fields, GenParm(f, depth+1))
+
+	// Enforcement for struct nesting depth
+	tf := tunables.typeFractions
+	amt := 100
+	off := uint8(0)
+	toodeep := depth >= int(tunables.structDepth)
+	if toodeep {
+		off = tf[0]
+		amt -= int(off)
+		tf[0] = 0
+	}
+	s := off
+	for i := 0; i < len(tf); i++ {
+		tf[i] += s
+		s += tf[i]
+	}
+
+	// Make adjusted selection
+	which := uint8(rand.Intn(amt)) + off
+	switch {
+	case which < tf[0]:
+		{
+			if toodeep {
+				panic("should not be here")
+			}
+			sp := new(structparm)
+			ns := len(f.structdefs)
+			sp.sname = fmt.Sprintf("StructF%dS%d", f.idx, ns)
+			f.structdefs = append(f.structdefs, sp)
+			nf := rand.Intn(7)
+			for fi := 0; fi < nf; fi++ {
+				sp.fields = append(sp.fields, GenParm(f, depth+1))
+			}
+			return sp
 		}
-		return sp
+	case which < tf[1]:
+		{
+			var ip numparm
+			ip.tag = intFlavor()
+			ip.widthInBits = intBits()
+			return ip
+		}
+	case which < tf[2]:
+		{
+			var fp numparm
+			fp.tag = "float"
+			fp.widthInBits = floatBits()
+			return fp
+		}
+	case which < tf[3]:
+		{
+			panic("not yet implemented")
+		}
+	case which < tf[4]:
+		{
+			panic("not yet implemented")
+		}
+	case which < tf[5]:
+		{
+			panic("not yet implemented")
+		}
 	}
-	if which < 5 {
-		var ip numparm
-		ip.tag = "int"
-		ip.widthInBits = intBits()
-		return ip
-	}
-	if which < 10 {
-		var ip numparm
-		ip.tag = "uint"
-		ip.widthInBits = intBits()
-		return ip
-	}
-	var fp numparm
-	fp.tag = "float"
-	fp.widthInBits = floatBits()
-	return fp
+
+	// fallback
+	var ip numparm
+	ip.tag = "uint"
+	ip.widthInBits = 8
+	return ip
 }
 
 func GenReturn(f *funcdef, depth int) parm {
@@ -271,6 +407,11 @@ func emitChecker(f *funcdef, outf *os.File) {
 }
 
 func Generate(calloutfile *os.File, checkoutfile *os.File, fidx int) {
+
+	verb(1, "gen fidx %d", fidx)
+
+	checkTunables(tunables)
+
 	// Generate a function with a random number of params and returns
 	f := GenFunc(fidx)
 	var fp *funcdef = &f
