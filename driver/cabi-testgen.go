@@ -32,8 +32,13 @@ func usage(msg string) {
 	if len(msg) > 0 {
 		fmt.Fprintf(os.Stderr, "error: %s\n", msg)
 	}
-	fmt.Fprintf(os.Stderr, "usage: apkread [flags] <APK file>\n")
+	fmt.Fprintf(os.Stderr, "usage: cabi-testgen [flags]\n\n")
 	flag.PrintDefaults()
+	fmt.Fprintf(os.Stderr, "Example:\n\n")
+	fmt.Fprintf(os.Stderr, "  cabi-testgen -n 500 -s 10101 -o gendir\n\n")
+	fmt.Fprintf(os.Stderr, "  \tgenerates Go with 500 test cases into a set of subdirs\n")
+	fmt.Fprintf(os.Stderr, "  \tin 'gendir', using random see 10101\n")
+
 	os.Exit(2)
 }
 
