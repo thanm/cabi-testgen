@@ -100,6 +100,10 @@ func main() {
 	utilspkg := *tagflag + "Utils"
 	mainpkg := *tagflag + "Main"
 
+	if *outdirflag != "." {
+		os.Mkdir(*outdirflag, 0777)
+	}
+	os.Mkdir(*outdirflag+"/"+callerpkg, 0777)
 	os.Mkdir(*outdirflag+"/"+callerpkg, 0777)
 	os.Mkdir(*outdirflag+"/"+checkerpkg, 0777)
 	os.Mkdir(*outdirflag+"/"+utilspkg, 0777)
