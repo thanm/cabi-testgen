@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"math/rand"
 	"os"
 )
@@ -99,15 +100,9 @@ func SetTunables(t TunableParams) {
 	tunables = t
 }
 
-func writeCom(outf *os.File, i int) {
+func writeCom(b *bytes.Buffer, i int) {
 	if i != 0 {
-		fmt.Fprintf(outf, ", ")
-	}
-}
-
-func bufCom(buf *bytes.Buffer, i int) {
-	if i != 0 {
-		buf.WriteString(", ")
+		b.WriteString(", ")
 	}
 }
 
@@ -122,35 +117,102 @@ func verb(vlevel int, s string, a ...interface{}) {
 
 type parm interface {
 	TypeName() string
-	Declare(outf *os.File, prefix string, suffix string, parmNo int)
+	Declare(b *bytes.Buffer, prefix string, suffix string, parmNo int)
 	GenValue(value int) (string, int)
 }
 
 type numparm struct {
 	tag         string
-	widthInBits int
+	widthInBits uint32
 }
+
+var f32parm *numparm = &numparm{"float", uint32(32)}
+var f64parm *numparm = &numparm{"float", uint32(64)}
 
 func (p numparm) TypeName() string {
 	return fmt.Sprintf("%s%d", p.tag, p.widthInBits)
 }
 
-func (p numparm) Declare(outf *os.File, prefix string, suffix string, parmNo int) {
-	fmt.Fprintf(outf, "%s%d %s%d%s", prefix, parmNo, p.tag, p.widthInBits, suffix)
+func (p numparm) Declare(b *bytes.Buffer, prefix string, suffix string, parmNo int) {
+	b.WriteString(fmt.Sprintf("%s%d %s%d%s", prefix, parmNo, p.tag, p.widthInBits, suffix))
+}
+
+func (p numparm) genRandNum(value int) (string, int) {
+	which := uint8(rand.Intn(100))
+	if p.tag == "int" {
+		var v int
+		if which < 3 {
+			// max
+			v = (1 << (p.widthInBits - 1)) - 1
+		} else if which < 5 {
+			// min
+			v = (-1 << (p.widthInBits - 1))
+		} else {
+			v = rand.Intn(1 << (p.widthInBits - 2))
+			if value%2 != 0 {
+				v = -v
+			}
+		}
+		return fmt.Sprintf("%s%d(%d)", p.tag, p.widthInBits, v), value + 1
+	}
+	if p.tag == "uint" {
+		var v int
+		if which < 3 {
+			// max
+			v = (1 << p.widthInBits) - 1
+		}
+		nrange := 1 << (p.widthInBits - 2)
+		v = rand.Intn(nrange)
+		return fmt.Sprintf("%s%d(%d)", p.tag, p.widthInBits, v), value + 1
+	}
+	if p.tag == "float" {
+		if p.widthInBits == 32 {
+			rf := rand.Float32() * (math.MaxFloat32 / 4)
+			if value%2 != 0 {
+				rf = -rf
+			}
+			return fmt.Sprintf("%s%d(%v)", p.tag, p.widthInBits, rf), value + 1
+		}
+		if p.widthInBits == 64 {
+			rf := rand.Float64() * (math.MaxFloat64 / 4)
+			if value%2 != 0 {
+				rf = -rf
+			}
+			return fmt.Sprintf("%s%d(%v)", p.tag, p.widthInBits,
+				rand.NormFloat64()), value + 1
+		}
+		panic("unknown float type")
+	}
+	if p.tag == "complex" {
+		if p.widthInBits == 32 {
+			f1, v2 := f32parm.genRandNum(value)
+			f2, v3 := f32parm.genRandNum(v2)
+			return fmt.Sprintf("complex32(%s,%s)", f1, f2), v3
+		}
+		if p.widthInBits == 64 {
+			f1, v2 := f64parm.genRandNum(value)
+			f2, v3 := f64parm.genRandNum(v2)
+			return fmt.Sprintf("complex64(%v,%v)", f1, f2), v3
+		}
+		panic("unknown complex type")
+	}
+	panic("unknown numeric type")
 }
 
 func (p numparm) GenValue(value int) (string, int) {
-	var s string
-	v := value
-	if p.tag == "int" && v%2 != 0 {
-		v = -v
-	}
-	if p.tag == "complex" {
-		s = fmt.Sprintf("complex(%d, %d)", value, value)
-	} else {
-		s = fmt.Sprintf("%s%d(%d)", p.tag, p.widthInBits, v)
-	}
-	return s, value + 1
+	return p.genRandNum(value)
+
+	// var s string
+	// v := value
+	// if p.tag == "int" && v%2 != 0 {
+	// 	v = -v
+	// }
+	// if p.tag == "complex" {
+	// 	s = fmt.Sprintf("complex(%d, %d)", value, value)
+	// } else {
+	// 	s = fmt.Sprintf("%s%d(%d)", p.tag, p.widthInBits, v)
+	// }
+	// return s, value + 1
 }
 
 type structparm struct {
@@ -162,8 +224,8 @@ func (p structparm) TypeName() string {
 	return p.sname
 }
 
-func (p structparm) Declare(outf *os.File, prefix string, suffix string, parmNo int) {
-	fmt.Fprintf(outf, "%s%d %s%s", prefix, parmNo, p.sname, suffix)
+func (p structparm) Declare(b *bytes.Buffer, prefix string, suffix string, parmNo int) {
+	b.WriteString(fmt.Sprintf("%s%d %s%s", prefix, parmNo, p.sname, suffix))
 }
 
 func (p structparm) GenValue(value int) (string, int) {
@@ -173,7 +235,7 @@ func (p structparm) GenValue(value int) (string, int) {
 	for fi, f := range p.fields {
 		var valstr string
 		valstr, value = f.GenValue(value)
-		bufCom(&buf, fi)
+		writeCom(&buf, fi)
 		buf.WriteString(valstr)
 	}
 	buf.WriteString("}")
@@ -190,9 +252,9 @@ func (p arrayparm) TypeName() string {
 	return p.aname
 }
 
-func (p arrayparm) Declare(outf *os.File, prefix string, suffix string, parmNo int) {
+func (p arrayparm) Declare(b *bytes.Buffer, prefix string, suffix string, parmNo int) {
 
-	fmt.Fprintf(outf, "%s%d %s%s", prefix, parmNo, p.aname, suffix)
+	b.WriteString(fmt.Sprintf("%s%d %s%s", prefix, parmNo, p.aname, suffix))
 }
 
 func (p arrayparm) GenValue(value int) (string, int) {
@@ -202,7 +264,7 @@ func (p arrayparm) GenValue(value int) (string, int) {
 	for i := 0; i < int(p.nelements); i++ {
 		var valstr string
 		valstr, value = p.eltype.GenValue(value)
-		bufCom(&buf, i)
+		writeCom(&buf, i)
 		buf.WriteString(valstr)
 	}
 	buf.WriteString("}")
@@ -225,10 +287,10 @@ func intFlavor() string {
 	return "int"
 }
 
-func intBits() int {
+func intBits() uint32 {
 	which := uint8(rand.Intn(100))
 	var t uint8 = 0
-	var bits int = 8
+	var bits uint32 = 8
 	for _, v := range tunables.intBitRanges {
 		t += v
 		if which < t {
@@ -236,15 +298,15 @@ func intBits() int {
 		}
 		bits *= 2
 	}
-	return int(tunables.intBitRanges[3])
+	return uint32(tunables.intBitRanges[3])
 }
 
-func floatBits() int {
+func floatBits() uint32 {
 	which := uint8(rand.Intn(100))
 	if which < tunables.floatBitRanges[0] {
-		return 32
+		return uint32(32)
 	}
-	return 64
+	return uint32(64)
 }
 
 func GenParm(f *funcdef, depth int) parm {
@@ -342,115 +404,115 @@ func GenFunc(fidx int) funcdef {
 	return f
 }
 
-func emitStructAndArrayDefs(f *funcdef, outf *os.File) {
+func emitStructAndArrayDefs(f *funcdef, b *bytes.Buffer) {
 	for _, s := range f.structdefs {
-		fmt.Fprintf(outf, "type %s struct {\n", s.sname)
+		b.WriteString(fmt.Sprintf("type %s struct {\n", s.sname))
 		for fi, sp := range s.fields {
-			sp.Declare(outf, "F", "\n", fi)
+			sp.Declare(b, "F", "\n", fi)
 		}
-		fmt.Fprintf(outf, "}\n\n")
+		b.WriteString("}\n\n")
 	}
 	for _, a := range f.arraydefs {
-		fmt.Fprintf(outf, "type %s [%d]%s\n\n", a.aname,
-			a.nelements, a.eltype.TypeName())
+		b.WriteString(fmt.Sprintf("type %s [%d]%s\n\n", a.aname,
+			a.nelements, a.eltype.TypeName()))
 	}
 }
 
-func emitCaller(f *funcdef, outf *os.File) {
+func emitCaller(f *funcdef, b *bytes.Buffer) {
 
-	fmt.Fprintf(outf, "func Caller%d() {\n", f.idx)
+	b.WriteString(fmt.Sprintf("func Caller%d() {\n", f.idx))
 	var value int = 1
 	for pi, p := range f.params {
-		p.Declare(outf, "  var p", "\n", pi)
+		p.Declare(b, "  var p", "\n", pi)
 		var valstr string
 		valstr, value = p.GenValue(value)
-		fmt.Fprintf(outf, "  p%d = %s\n", pi, valstr)
+		b.WriteString(fmt.Sprintf("  p%d = %s\n", pi, valstr))
 	}
 
 	// calling code
-	fmt.Fprintf(outf, "  // %d returns %d params\n",
-		len(f.returns), len(f.params))
-	fmt.Fprintf(outf, "  ")
+	b.WriteString(fmt.Sprintf("  // %d returns %d params\n",
+		len(f.returns), len(f.params)))
+	b.WriteString("  ")
 	for ri, _ := range f.returns {
-		writeCom(outf, ri)
-		fmt.Fprintf(outf, "r%d", ri)
+		writeCom(b, ri)
+		b.WriteString(fmt.Sprintf("r%d", ri))
 	}
 	if len(f.returns) > 0 {
-		fmt.Fprintf(outf, " := ")
+		b.WriteString(" := ")
 	}
-	fmt.Fprintf(outf, "Test%d(", f.idx)
+	b.WriteString(fmt.Sprintf("Test%d(", f.idx))
 	for pi, _ := range f.params {
-		writeCom(outf, pi)
-		fmt.Fprintf(outf, "p%d", pi)
+		writeCom(b, pi)
+		b.WriteString(fmt.Sprintf("p%d", pi))
 	}
-	fmt.Fprintf(outf, ")\n")
+	b.WriteString(")\n")
 
 	// checking values returned
 	value = 1
 	for ri, r := range f.returns {
 		var valstr string
 		valstr, value = r.GenValue(value)
-		fmt.Fprintf(outf, "  c%d := %s\n", ri, valstr)
-		fmt.Fprintf(outf, "  if r%d != c%d {\n", ri, ri)
-		fmt.Fprintf(outf, "    NoteFailure(%d, \"return\", %d)\n", f.idx, ri)
-		fmt.Fprintf(outf, "  }\n")
+		b.WriteString(fmt.Sprintf("  c%d := %s\n", ri, valstr))
+		b.WriteString(fmt.Sprintf("  if r%d != c%d {\n", ri, ri))
+		b.WriteString(fmt.Sprintf("    NoteFailure(%d, \"return\", %d)\n", f.idx, ri))
+		b.WriteString("  }\n")
 	}
 
-	fmt.Fprintf(outf, "}\n\n")
+	b.WriteString("}\n\n")
 }
 
-func emitChecker(f *funcdef, outf *os.File) {
-	emitStructAndArrayDefs(f, outf)
-	fmt.Fprintf(outf, "// %d returns %d params\n", len(f.returns), len(f.params))
-	fmt.Fprintf(outf, "func Test%d(", f.idx)
+func emitChecker(f *funcdef, b *bytes.Buffer) {
+	emitStructAndArrayDefs(f, b)
+	b.WriteString(fmt.Sprintf("// %d returns %d params\n", len(f.returns), len(f.params)))
+	b.WriteString(fmt.Sprintf("func Test%d(", f.idx))
 
 	// params
 	for pi, p := range f.params {
-		writeCom(outf, pi)
-		p.Declare(outf, "p", "", pi)
+		writeCom(b, pi)
+		p.Declare(b, "p", "", pi)
 	}
-	fmt.Fprintf(outf, ") ")
+	b.WriteString(") ")
 
 	// returns
 	if len(f.returns) > 0 {
-		fmt.Fprintf(outf, "(")
+		b.WriteString("(")
 	}
 	for ri, r := range f.returns {
-		writeCom(outf, ri)
-		r.Declare(outf, "r", "", ri)
+		writeCom(b, ri)
+		r.Declare(b, "r", "", ri)
 	}
 	if len(f.returns) > 0 {
-		fmt.Fprintf(outf, ")")
+		b.WriteString(")")
 	}
-	fmt.Fprintf(outf, " {\n")
+	b.WriteString(" {\n")
 
 	// checking code
 	value := 1
 	for pi, p := range f.params {
 		var valstr string
 		valstr, value = p.GenValue(value)
-		fmt.Fprintf(outf, "  c%d := %s\n", pi, valstr)
-		fmt.Fprintf(outf, "  if p%d != c%d {\n", pi, pi)
-		fmt.Fprintf(outf, "    NoteFailure(%d, \"parm\", %d)\n", f.idx, pi)
-		fmt.Fprintf(outf, "  }\n")
+		b.WriteString(fmt.Sprintf("  c%d := %s\n", pi, valstr))
+		b.WriteString(fmt.Sprintf("  if p%d != c%d {\n", pi, pi))
+		b.WriteString(fmt.Sprintf("    NoteFailure(%d, \"parm\", %d)\n", f.idx, pi))
+		b.WriteString("  }\n")
 	}
 
 	// returning code
-	fmt.Fprintf(outf, "  return ")
+	b.WriteString("  return ")
 	if len(f.returns) > 0 {
 		value := 1
 		for ri, r := range f.returns {
 			var valstr string
-			writeCom(outf, ri)
+			writeCom(b, ri)
 			valstr, value = r.GenValue(value)
-			fmt.Fprintf(outf, "%s", valstr)
+			b.WriteString(fmt.Sprintf("%s", valstr))
 		}
 	}
-	fmt.Fprintf(outf, "\n")
-	fmt.Fprintf(outf, "}\n\n")
+	b.WriteString("\n")
+	b.WriteString("}\n\n")
 }
 
-func Generate(calloutfile *os.File, checkoutfile *os.File, fidx int) {
+func GenPair(calloutfile *os.File, checkoutfile *os.File, fidx int, b *bytes.Buffer, seed int64) int64 {
 
 	verb(1, "gen fidx %d", fidx)
 
@@ -461,8 +523,111 @@ func Generate(calloutfile *os.File, checkoutfile *os.File, fidx int) {
 	var fp *funcdef = &f
 
 	// Emit caller side
-	emitCaller(fp, calloutfile)
+	rand.Seed(seed)
+	emitCaller(fp, b)
+	b.WriteTo(calloutfile)
+	b.Reset()
 
 	// Emit checker side
-	emitChecker(fp, checkoutfile)
+	rand.Seed(seed)
+	emitChecker(fp, b)
+	b.WriteTo(checkoutfile)
+	b.Reset()
+
+	return seed + 1
+}
+
+func openOutputFile(filename string, pk string, imports []string, ipref string) *os.File {
+	verb(1, "opening %s", filename)
+	outf, err := os.OpenFile(filename, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0666)
+	if err != nil {
+		log.Fatal(err)
+	}
+	outf.WriteString(fmt.Sprintf("package %s\n\n", pk))
+	for _, imp := range imports {
+		outf.WriteString(fmt.Sprintf("import . \"%s%s\"\n", ipref, imp))
+	}
+	outf.WriteString("\n")
+	return outf
+}
+
+func emitUtils(outf *os.File) {
+	fmt.Fprintf(outf, "import \"fmt\"\n")
+	fmt.Fprintf(outf, "import \"os\"\n\n")
+	fmt.Fprintf(outf, "var FailCount int\n\n")
+	fmt.Fprintf(outf, "func NoteFailure(fidx int, pref string, parmNo int) {\n")
+	fmt.Fprintf(outf, "  FailCount += 1\n")
+	fmt.Fprintf(outf, "  fmt.Fprintf(os.Stderr, ")
+	fmt.Fprintf(outf, "\"Error: fail on func %%d %%s %%d\\n\", fidx, pref, parmNo)\n")
+	fmt.Fprintf(outf, "}\n\n")
+}
+
+func emitMain(outf *os.File, numit int) {
+	fmt.Fprintf(outf, "import \"fmt\"\n")
+	fmt.Fprintf(outf, "import \"os\"\n\n")
+	fmt.Fprintf(outf, "func main() {\n")
+	fmt.Fprintf(outf, "  fmt.Fprintf(os.Stderr, \"starting main\\n\")\n")
+	for i := 0; i < numit; i++ {
+		fmt.Fprintf(outf, "  Caller%d()\n", i)
+	}
+	fmt.Fprintf(outf, "  if FailCount != 0 {\n")
+	fmt.Fprintf(outf, "    fmt.Fprintf(os.Stderr, \"FAILURES: %%d\\n\", FailCount)\n")
+	fmt.Fprintf(outf, "    os.Exit(2)\n")
+	fmt.Fprintf(outf, "  }\n")
+	fmt.Fprintf(outf, "  fmt.Fprintf(os.Stderr, \"finished %d tests\\n\")\n", numit)
+	fmt.Fprintf(outf, "}\n")
+}
+
+func makeDir(d string) {
+	verb(1, "creating %s", d)
+	os.Mkdir(d, 0777)
+}
+
+func Generate(tag string, outdir string, pkgpath string, numit int, seed int64) {
+	callerpkg := tag + "Caller"
+	checkerpkg := tag + "Checker"
+	utilspkg := tag + "Utils"
+	mainpkg := tag + "Main"
+
+	var ipref string
+	if len(pkgpath) > 0 {
+		ipref = pkgpath + "/"
+	}
+
+	if outdir != "." {
+		makeDir(outdir)
+	}
+	verb(1, "creating %s", outdir)
+	makeDir(outdir + "/" + callerpkg)
+	makeDir(outdir + "/" + callerpkg)
+	makeDir(outdir + "/" + checkerpkg)
+	makeDir(outdir + "/" + utilspkg)
+
+	callerfile := outdir + "/" + callerpkg + "/" + callerpkg + ".go"
+	checkerfile := outdir + "/" + checkerpkg + "/" + checkerpkg + ".go"
+	utilsfile := outdir + "/" + utilspkg + "/" + utilspkg + ".go"
+	mainfile := outdir + "/" + mainpkg + ".go"
+
+	verb(1, "files: %s %s %s %s", callerfile, checkerfile, utilsfile, mainfile)
+
+	calleroutfile := openOutputFile(callerfile, callerpkg,
+		[]string{checkerpkg, utilspkg}, ipref)
+	checkeroutfile := openOutputFile(checkerfile, checkerpkg,
+		[]string{utilspkg}, ipref)
+	utilsoutfile := openOutputFile(utilsfile, utilspkg, []string{}, "")
+	mainoutfile := openOutputFile(mainfile, "main", []string{callerpkg, utilspkg}, ipref)
+
+	verb(1, "emit utils")
+	emitUtils(utilsoutfile)
+	emitMain(mainoutfile, numit)
+	var b bytes.Buffer
+	for i := 0; i < numit; i++ {
+		seed = GenPair(calleroutfile, checkeroutfile, i, &b, seed)
+	}
+
+	verb(1, "closing files")
+	utilsoutfile.Close()
+	calleroutfile.Close()
+	checkeroutfile.Close()
+	mainoutfile.Close()
 }
