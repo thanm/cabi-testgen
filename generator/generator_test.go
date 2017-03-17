@@ -14,6 +14,26 @@ import (
 func TestBasic(t *testing.T) {
 	rand.Seed(0)
 	checkTunables(tunables)
+	for i := 0; i < 1000; i++ {
+		f := GenFunc(i)
+		var fp *funcdef = &f
+		var buf bytes.Buffer
+		var b *bytes.Buffer = &buf
+		emitCaller(fp, b)
+		emitChecker(fp, b)
+	}
+}
+func TestMoreComplicated(t *testing.T) {
+	rand.Seed(0)
+	saveit := tunables
+	defer func() { tunables = saveit }()
+
+	// Turn on complex, nested structs
+	tunables.structDepth = 3
+	tunables.typeFractions[0] -= 10
+	tunables.typeFractions[4] += 10
+
+	checkTunables(tunables)
 	for i := 0; i < 10000; i++ {
 		f := GenFunc(i)
 		var fp *funcdef = &f

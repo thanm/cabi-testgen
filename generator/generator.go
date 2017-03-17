@@ -375,7 +375,10 @@ func GenParm(f *funcdef, depth int) parm {
 		}
 	case which < tf[4]:
 		{
-			panic("pointers not yet implemented")
+			var fp numparm
+			fp.tag = "complex"
+			fp.widthInBits = floatBits()
+			return fp
 		}
 	}
 
