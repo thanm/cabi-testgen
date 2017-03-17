@@ -361,15 +361,16 @@ func emitCaller(f *funcdef, outf *os.File) {
 	fmt.Fprintf(outf, "func Caller%d() {\n", f.idx)
 	var value int = 1
 	for pi, p := range f.params {
-		p.Declare(outf, "var p", "\n", pi)
+		p.Declare(outf, "  var p", "\n", pi)
 		var valstr string
 		valstr, value = p.GenValue(value)
-		fmt.Fprintf(outf, "p%d = %s\n", pi, valstr)
+		fmt.Fprintf(outf, "  p%d = %s\n", pi, valstr)
 	}
 
 	// calling code
-	fmt.Fprintf(outf, "// %d returns %d params\n",
+	fmt.Fprintf(outf, "  // %d returns %d params\n",
 		len(f.returns), len(f.params))
+	fmt.Fprintf(outf, "  ")
 	for ri, _ := range f.returns {
 		writeCom(outf, ri)
 		fmt.Fprintf(outf, "r%d", ri)
