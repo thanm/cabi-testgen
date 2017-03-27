@@ -23,6 +23,7 @@ func TestBasic(t *testing.T) {
 		emitChecker(fp, b)
 	}
 }
+
 func TestMoreComplicated(t *testing.T) {
 	rand.Seed(0)
 	saveit := tunables
@@ -36,7 +37,7 @@ func TestMoreComplicated(t *testing.T) {
 	// Verbctl = 5
 
 	checkTunables(tunables)
-	for i := 0; i < 1000; i++ {
+	for i := 0; i < 10000; i++ {
 		f := GenFunc(i)
 		var fp *funcdef = &f
 		var buf bytes.Buffer

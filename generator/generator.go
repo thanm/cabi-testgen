@@ -232,16 +232,6 @@ func (p numparm) genRandNum(value int) (string, int) {
 }
 
 func (p numparm) GenValue(value int) (string, int) {
-	// if p.ctl {
-	// 	switch ctlsel {
-	// 	case initialVal:
-	// 		return "10", value
-	// 	case decrementParam:
-	// 		return fmt.Sprintf("p%d - 1", p.pidx), value
-	// 	case constVal:
-	// 		return p.genRandNum(value)
-	// 	}
-	// }
 	return p.genRandNum(value)
 }
 
@@ -429,7 +419,7 @@ func floatBits() uint32 {
 	return uint32(64)
 }
 
-func GenParm(f *funcdef, depth int) parm {
+func GenParm(f *funcdef, depth int, mkctl bool) parm {
 
 	// Enforcement for struct or array nesting depth (zeros tf[0] and
 	// tf[1])
@@ -468,7 +458,7 @@ func GenParm(f *funcdef, depth int) parm {
 			f.structdefs = append(f.structdefs, sp)
 			nf := rand.Intn(int(tunables.nStructFields))
 			for fi := 0; fi < nf; fi++ {
-				sp.fields = append(sp.fields, GenParm(f, depth+1))
+				sp.fields = append(sp.fields, GenParm(f, depth+1, false))
 			}
 			return sp
 		}
@@ -480,7 +470,7 @@ func GenParm(f *funcdef, depth int) parm {
 			ap.aname = fmt.Sprintf("ArrayF%dS%dE%d", f.idx, ns, nel)
 			f.arraydefs = append(f.arraydefs, ap)
 			ap.nelements = nel
-			ap.eltype = GenParm(f, depth+1)
+			ap.eltype = GenParm(f, depth+1, false)
 			return ap
 		}
 	case which < tf[2]:
@@ -488,6 +478,9 @@ func GenParm(f *funcdef, depth int) parm {
 			var ip numparm
 			ip.tag = intFlavor()
 			ip.widthInBits = intBits()
+			if mkctl {
+				ip.ctl = true
+			}
 			return ip
 		}
 	case which < tf[3]:
@@ -514,16 +507,21 @@ func GenParm(f *funcdef, depth int) parm {
 }
 
 func GenReturn(f *funcdef, depth int) parm {
-	return GenParm(f, depth)
+	return GenParm(f, depth, false)
 }
 
 func GenFunc(fidx int) funcdef {
 	var f funcdef
 	f.idx = fidx
-	numParams := rand.Intn(4)
-	numReturns := rand.Intn(2)
+	numParams := rand.Intn(6)
+	numReturns := rand.Intn(5)
+	needControl := true
 	for pi := 0; pi < numParams; pi++ {
-		f.params = append(f.params, GenParm(&f, 0))
+		newparm := GenParm(&f, 0, needControl)
+		if newparm.IsControl() {
+			needControl = false
+		}
+		f.params = append(f.params, newparm)
 	}
 	for ri := 0; ri < numReturns; ri++ {
 		f.returns = append(f.returns, GenReturn(&f, 0))
@@ -548,7 +546,17 @@ func emitStructAndArrayDefs(f *funcdef, b *bytes.Buffer) {
 func emitCaller(f *funcdef, b *bytes.Buffer) {
 
 	b.WriteString(fmt.Sprintf("func Caller%d() {\n", f.idx))
+
+	// generate return constants
 	var value int = 1
+	for ri, r := range f.returns {
+		var valstr string
+		valstr, value = r.GenValue(value)
+		b.WriteString(fmt.Sprintf("  c%d := %s\n", ri, valstr))
+	}
+
+	// generate param constants
+	value = 1
 	for pi, p := range f.params {
 		p.Declare(b, "  var p", "\n", pi)
 		var valstr string
@@ -579,11 +587,7 @@ func emitCaller(f *funcdef, b *bytes.Buffer) {
 	b.WriteString(")\n")
 
 	// checking values returned
-	value = 1
-	for ri, r := range f.returns {
-		var valstr string
-		valstr, value = r.GenValue(value)
-		b.WriteString(fmt.Sprintf("  c%d := %s\n", ri, valstr))
+	for ri, _ := range f.returns {
 		b.WriteString(fmt.Sprintf("  if r%d != c%d {\n", ri, ri))
 		b.WriteString(fmt.Sprintf("    NoteFailure(%d, \"return\", %d)\n", f.idx, ri))
 		b.WriteString("  }\n")
@@ -618,15 +622,23 @@ func emitChecker(f *funcdef, b *bytes.Buffer) {
 	}
 	b.WriteString(" {\n")
 
-	// parameter checking code
+	// generate return constants
 	value := 1
+	for ri, r := range f.returns {
+		var valstr string
+		valstr, value = r.GenValue(value)
+		b.WriteString(fmt.Sprintf("  rc%d := %s\n", ri, valstr))
+	}
+
+	// parameter checking code
+	value = 1
 	haveControl := false
 	for pi, p := range f.params {
 		verb(4, "emitting param checking code for p%d", pi)
 		if p.IsControl() {
 			b.WriteString(fmt.Sprintf("  if p%d == 0 {\n", pi))
 			emitReturnConst(f, b)
-			b.WriteString("}\n")
+			b.WriteString("  }\n")
 			haveControl = true
 		} else {
 			numel := p.NumElements()
@@ -647,8 +659,12 @@ func emitChecker(f *funcdef, b *bytes.Buffer) {
 
 	// return recursive call if we have a control, const val otherwise
 	if haveControl {
-		b.WriteString(fmt.Sprintf(" return Test%d(", f.idx))
+		if len(f.returns) > 0 {
+			b.WriteString(" return ")
+		}
+		b.WriteString(fmt.Sprintf(" Test%d(", f.idx))
 		for pi, p := range f.params {
+			writeCom(b, pi)
 			if p.IsControl() {
 				b.WriteString(fmt.Sprintf(" p%d-1", pi))
 			} else {
@@ -656,6 +672,9 @@ func emitChecker(f *funcdef, b *bytes.Buffer) {
 			}
 		}
 		b.WriteString(")\n")
+		if len(f.returns) == 0 {
+			b.WriteString(" return\n")
+		}
 	} else {
 		emitReturnConst(f, b)
 	}
@@ -665,14 +684,11 @@ func emitChecker(f *funcdef, b *bytes.Buffer) {
 
 func emitReturnConst(f *funcdef, b *bytes.Buffer) {
 	// returning code
-	b.WriteString("  return ")
+	b.WriteString("    return ")
 	if len(f.returns) > 0 {
-		value := 1
-		for ri, r := range f.returns {
-			var valstr string
+		for ri, _ := range f.returns {
 			writeCom(b, ri)
-			valstr, value = r.GenValue(value)
-			b.WriteString(fmt.Sprintf("%s", valstr))
+			b.WriteString(fmt.Sprintf("rc%d", ri))
 		}
 	}
 	b.WriteString("\n")
