@@ -33,14 +33,18 @@ func TestMoreComplicated(t *testing.T) {
 	tunables.typeFractions[0] -= 10
 	tunables.typeFractions[4] += 10
 
+	// Verbctl = 5
+
 	checkTunables(tunables)
-	for i := 0; i < 10000; i++ {
+	for i := 0; i < 1000; i++ {
 		f := GenFunc(i)
 		var fp *funcdef = &f
 		var buf bytes.Buffer
 		var b *bytes.Buffer = &buf
 		emitCaller(fp, b)
+		verb(1, "finished iter %d caller", i)
 		emitChecker(fp, b)
+		verb(1, "finished iter %d checker", i)
 	}
 }
 
