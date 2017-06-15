@@ -48,6 +48,9 @@ type TunableParams struct {
 	// level. If nesting precludes using a struct, other types
 	// are chosen from instead according to same proportions.
 	typeFractions [5]uint8
+
+	// Whether we try to emit recurive calls
+	EmitRecur bool
 }
 
 var tunables = TunableParams{
@@ -60,6 +63,7 @@ var tunables = TunableParams{
 	unsignedRanges: [2]uint8{50, 50},
 	structDepth:    1,
 	typeFractions:  [5]uint8{35, 15, 30, 20, 0},
+	EmitRecur:      true,
 }
 
 func DefaultTunables() TunableParams {
@@ -515,7 +519,7 @@ func GenFunc(fidx int) funcdef {
 	f.idx = fidx
 	numParams := rand.Intn(6)
 	numReturns := rand.Intn(5)
-	needControl := true
+	needControl := tunables.EmitRecur
 	for pi := 0; pi < numParams; pi++ {
 		newparm := GenParm(&f, 0, needControl)
 		if newparm.IsControl() {
@@ -651,7 +655,8 @@ func emitChecker(f *funcdef, b *bytes.Buffer) {
 					continue
 				}
 				b.WriteString(fmt.Sprintf("  if %s != %s {\n", elref, valstr))
-				b.WriteString(fmt.Sprintf("    NoteFailure(%d, \"parm\", %d)\n", f.idx, pi))
+				b.WriteString(fmt.Sprintf("    NoteFailureElem(%d, \"parm\", %d, %d)\n", f.idx, pi, i))
+				b.WriteString("    return\n")
 				b.WriteString("  }\n")
 			}
 		}
@@ -659,6 +664,7 @@ func emitChecker(f *funcdef, b *bytes.Buffer) {
 
 	// return recursive call if we have a control, const val otherwise
 	if haveControl {
+		b.WriteString(" // recursive call\n")
 		if len(f.returns) > 0 {
 			b.WriteString(" return ")
 		}
@@ -694,7 +700,7 @@ func emitReturnConst(f *funcdef, b *bytes.Buffer) {
 	b.WriteString("\n")
 }
 
-func GenPair(calloutfile *os.File, checkoutfile *os.File, fidx int, b *bytes.Buffer, seed int64) int64 {
+func GenPair(calloutfile *os.File, checkoutfile *os.File, fidx int, b *bytes.Buffer, seed int64, emit bool) int64 {
 
 	verb(1, "gen fidx %d", fidx)
 
@@ -707,13 +713,17 @@ func GenPair(calloutfile *os.File, checkoutfile *os.File, fidx int, b *bytes.Buf
 	// Emit caller side
 	rand.Seed(seed)
 	emitCaller(fp, b)
-	b.WriteTo(calloutfile)
+	if emit {
+		b.WriteTo(calloutfile)
+	}
 	b.Reset()
 
 	// Emit checker side
 	rand.Seed(seed)
 	emitChecker(fp, b)
-	b.WriteTo(checkoutfile)
+	if emit {
+		b.WriteTo(checkoutfile)
+	}
 	b.Reset()
 
 	return seed + 1
@@ -740,7 +750,18 @@ func emitUtils(outf *os.File) {
 	fmt.Fprintf(outf, "func NoteFailure(fidx int, pref string, parmNo int) {\n")
 	fmt.Fprintf(outf, "  FailCount += 1\n")
 	fmt.Fprintf(outf, "  fmt.Fprintf(os.Stderr, ")
-	fmt.Fprintf(outf, "\"Error: fail on func %%d %%s %%d\\n\", fidx, pref, parmNo)\n")
+	fmt.Fprintf(outf, "\"Error: fail on =Test%%d= %%s %%d\\n\", fidx, pref, parmNo)\n")
+	fmt.Fprintf(outf, "  if (FailCount > 10) {\n")
+	fmt.Fprintf(outf, "    os.Exit(1)\n")
+	fmt.Fprintf(outf, "  }\n")
+	fmt.Fprintf(outf, "}\n\n")
+	fmt.Fprintf(outf, "func NoteFailureElem(fidx int, pref string, parmNo int, elem int) {\n")
+	fmt.Fprintf(outf, "  FailCount += 1\n")
+	fmt.Fprintf(outf, "  fmt.Fprintf(os.Stderr, ")
+	fmt.Fprintf(outf, "\"Error: fail on =Test%%d= %%s %%d elem %%d\\n\", fidx, pref, parmNo, elem)\n")
+	fmt.Fprintf(outf, "  if (FailCount > 10) {\n")
+	fmt.Fprintf(outf, "    os.Exit(1)\n")
+	fmt.Fprintf(outf, "  }\n")
 	fmt.Fprintf(outf, "}\n\n")
 }
 
@@ -765,7 +786,7 @@ func makeDir(d string) {
 	os.Mkdir(d, 0777)
 }
 
-func Generate(tag string, outdir string, pkgpath string, numit int, seed int64) {
+func Generate(tag string, outdir string, pkgpath string, numit int, seed int64, fcnmask map[int]int) {
 	callerpkg := tag + "Caller"
 	checkerpkg := tag + "Checker"
 	utilspkg := tag + "Utils"
@@ -804,7 +825,13 @@ func Generate(tag string, outdir string, pkgpath string, numit int, seed int64) 
 	emitMain(mainoutfile, numit)
 	var b bytes.Buffer
 	for i := 0; i < numit; i++ {
-		seed = GenPair(calleroutfile, checkeroutfile, i, &b, seed)
+		doemit := false
+		if len(fcnmask) == 0 {
+			doemit = true
+		} else if _, ok := fcnmask[i]; ok {
+			doemit = true
+		}
+		seed = GenPair(calleroutfile, checkeroutfile, i, &b, seed, doemit)
 	}
 
 	verb(1, "closing files")
