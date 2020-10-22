@@ -4,7 +4,9 @@ Rudimentary test harness for C-ABI testing. Randomly generates functions with
 interesting signatures (mix of arrays, scalars, structs) plus code to call it
 with specific values. The resulting program (when run) includes code to call
 each test function and verify that values are being passed/received
-properly. The intent here is that you can build one half of the test (caller or callee) with a "good" compiler and the other half with a "suspect" compiler, then test to see if the suspect compiler is doing things correctly.
+properly. 
+
+This can be used "as is" or one half of the test (caller or callee) with a "good" compiler and the other half with a "suspect" compiler, then test to see if the suspect compiler is doing things correctly.
 
 ## What the generated code looks like
 
@@ -77,7 +79,7 @@ $
 
 ```
 
-Let's say that I'm testing an experimental Go compiler and I want to make sure that it plays nicely with a known good compiler. I could do this using the following:
+Let's say that I'm testing a compile change that I think may break parameter passing or returns in some way (for corner cases, etc). I could do this using the following:
 
 
 ```
@@ -86,16 +88,20 @@ $ cd ${GOPATH}/src/cabiTest
 # Fresh start
 $ rm -f $GOPATH/pkg/*/cabiTest/*.a
 
-# Build everything with "good" copiler
-$ go install -x -compiler gccgo 
-...
+# Generate sources
+$ go get github.com/thanm/cabi-testgen/cabi-testgen
+$ cd $GOPATH
+$ cabi-testgen -n 500 -s 12345 -o $GOPATH/src/cabiTest -p cabiTest
+$ cd ${GOPATH}/src/cabiTest
+$ ls 
+genCaller  genChecker  genMain.go  genUtils
+$
+
+# Build 'genChecker' with suspect compiler option.
+$ go build -gcflags=cabiTest/genChecker=-enable-suspect-feature" .
 
 # Now build just the genChecker package with the suspect compiler
-$ rm $GOPATH/pkg/*/cabiTest/libgenChecker.a
-$ go install -x -compiler gccgo ./genChecker
 
-# Compile and link driver
-$ go build -x -compiler gccgo ./genMain.go
 ...
 
 # Run
@@ -104,5 +110,7 @@ starting main
 finished 500 tests
 ```
 
-In the scenario above, each "CallerXXX" function would invoke "TestXXX", which would check all incoming param vals, the verify all returned vals as well.
+In the scenario above, each "CallerXXX" function would invoke "TestXXX", which would check all incoming param vals, and verify all returned vals as well.
+
+
 

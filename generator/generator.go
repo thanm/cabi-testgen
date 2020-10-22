@@ -8,6 +8,7 @@ import (
 	"math"
 	"math/rand"
 	"os"
+	"strconv"
 )
 
 const (
@@ -126,13 +127,14 @@ func verb(vlevel int, s string, a ...interface{}) {
 }
 
 type parm interface {
-	Declare(b *bytes.Buffer, prefix string, suffix string, parmNo int)
+	Declare(b *bytes.Buffer, prefix string, suffix string, parmNo int, caller bool)
 	GenElemRef(elidx int, path string) (string, parm)
-	GenValue(value int) (string, int)
+	GenValue(value int, caller bool) (string, int)
 	IsControl() bool
 	NumElements() int
 	String() string
 	TypeName() string
+	QualName() string
 }
 
 type numparm struct {
@@ -146,6 +148,10 @@ var f64parm *numparm = &numparm{"float", uint32(64), false}
 
 func (p numparm) TypeName() string {
 	return fmt.Sprintf("%s%d", p.tag, p.widthInBits)
+}
+
+func (p numparm) QualName() string {
+	return p.TypeName()
 }
 
 func (p numparm) String() string {
@@ -168,8 +174,7 @@ func (p numparm) GenElemRef(elidx int, path string) (string, parm) {
 	return path, p
 }
 
-func (p numparm) Declare(b *bytes.Buffer, prefix string, suffix string, parmNo int) {
-
+func (p numparm) Declare(b *bytes.Buffer, prefix string, suffix string, parmNo int, caller bool) {
 	b.WriteString(fmt.Sprintf("%s%d %s%d%s", prefix, parmNo, p.tag, p.widthInBits, suffix))
 }
 
@@ -235,12 +240,13 @@ func (p numparm) genRandNum(value int) (string, int) {
 	panic("unknown numeric type")
 }
 
-func (p numparm) GenValue(value int) (string, int) {
+func (p numparm) GenValue(value int, caller bool) (string, int) {
 	return p.genRandNum(value)
 }
 
 type structparm struct {
 	sname  string
+	qname  string
 	fields []parm
 }
 
@@ -248,8 +254,16 @@ func (p structparm) TypeName() string {
 	return p.sname
 }
 
-func (p structparm) Declare(b *bytes.Buffer, prefix string, suffix string, parmNo int) {
-	b.WriteString(fmt.Sprintf("%s%d %s%s", prefix, parmNo, p.sname, suffix))
+func (p structparm) QualName() string {
+	return p.qname
+}
+
+func (p structparm) Declare(b *bytes.Buffer, prefix string, suffix string, parmNo int, caller bool) {
+	n := p.sname
+	if caller {
+		n = p.qname
+	}
+	b.WriteString(fmt.Sprintf("%s%d %s%s", prefix, parmNo, n, suffix))
 }
 
 func (p structparm) String() string {
@@ -263,13 +277,17 @@ func (p structparm) String() string {
 	return buf.String()
 }
 
-func (p structparm) GenValue(value int) (string, int) {
+func (p structparm) GenValue(value int, caller bool) (string, int) {
 	var buf bytes.Buffer
 
-	buf.WriteString(fmt.Sprintf("%s{", p.sname))
+	n := p.sname
+	if caller {
+		n = p.qname
+	}
+	buf.WriteString(fmt.Sprintf("%s{", n))
 	for fi, f := range p.fields {
 		var valstr string
-		valstr, value = f.GenValue(value)
+		valstr, value = f.GenValue(value, caller)
 		writeCom(&buf, fi)
 		buf.WriteString(valstr)
 	}
@@ -321,6 +339,7 @@ func (p structparm) GenElemRef(elidx int, path string) (string, parm) {
 
 type arrayparm struct {
 	aname     string
+	qname     string
 	nelements uint8
 	eltype    parm
 }
@@ -333,22 +352,33 @@ func (p arrayparm) TypeName() string {
 	return p.aname
 }
 
-func (p arrayparm) Declare(b *bytes.Buffer, prefix string, suffix string, parmNo int) {
+func (p arrayparm) QualName() string {
+	return p.qname
+}
 
-	b.WriteString(fmt.Sprintf("%s%d %s%s", prefix, parmNo, p.aname, suffix))
+func (p arrayparm) Declare(b *bytes.Buffer, prefix string, suffix string, parmNo int, caller bool) {
+	n := p.aname
+	if caller {
+		n = p.qname
+	}
+	b.WriteString(fmt.Sprintf("%s%d %s%s", prefix, parmNo, n, suffix))
 }
 
 func (p arrayparm) String() string {
 	return fmt.Sprintf("%s %d-element array of %s", p.aname, p.nelements, p.eltype.String())
 }
 
-func (p arrayparm) GenValue(value int) (string, int) {
+func (p arrayparm) GenValue(value int, caller bool) (string, int) {
 	var buf bytes.Buffer
 
-	buf.WriteString(fmt.Sprintf("%s{", p.aname))
+	n := p.aname
+	if caller {
+		n = p.qname
+	}
+	buf.WriteString(fmt.Sprintf("%s{", n))
 	for i := 0; i < int(p.nelements); i++ {
 		var valstr string
-		valstr, value = p.eltype.GenValue(value)
+		valstr, value = p.eltype.GenValue(value, caller)
 		writeCom(&buf, i)
 		buf.WriteString(valstr)
 	}
@@ -423,7 +453,7 @@ func floatBits() uint32 {
 	return uint32(64)
 }
 
-func GenParm(f *funcdef, depth int, mkctl bool) parm {
+func (s *genstate) GenParm(f *funcdef, depth int, mkctl bool, pidx int) parm {
 
 	// Enforcement for struct or array nesting depth (zeros tf[0] and
 	// tf[1])
@@ -439,10 +469,10 @@ func GenParm(f *funcdef, depth int, mkctl bool) parm {
 	}
 
 	// Convert tf into a cumulative sum
-	s := uint8(0)
+	sum := uint8(0)
 	for i := 0; i < len(tf); i++ {
-		tf[i] += s
-		s += tf[i]
+		tf[i] += sum
+		sum += tf[i]
 	}
 	for i := 2; i < len(tf); i++ {
 		tf[i] += off
@@ -459,10 +489,12 @@ func GenParm(f *funcdef, depth int, mkctl bool) parm {
 			sp := new(structparm)
 			ns := len(f.structdefs)
 			sp.sname = fmt.Sprintf("StructF%dS%d", f.idx, ns)
+			sp.qname = fmt.Sprintf("%s.StructF%dS%d",
+				s.checkerPkg(pidx), f.idx, ns)
 			f.structdefs = append(f.structdefs, sp)
 			nf := rand.Intn(int(tunables.nStructFields))
 			for fi := 0; fi < nf; fi++ {
-				sp.fields = append(sp.fields, GenParm(f, depth+1, false))
+				sp.fields = append(sp.fields, s.GenParm(f, depth+1, false, pidx))
 			}
 			return sp
 		}
@@ -472,9 +504,11 @@ func GenParm(f *funcdef, depth int, mkctl bool) parm {
 			ns := len(f.arraydefs)
 			nel := uint8(rand.Intn(int(tunables.nArrayElements)))
 			ap.aname = fmt.Sprintf("ArrayF%dS%dE%d", f.idx, ns, nel)
+			ap.qname = fmt.Sprintf("%s.ArrayF%dS%dE%d", s.checkerPkg(pidx),
+				f.idx, ns, nel)
 			f.arraydefs = append(f.arraydefs, ap)
 			ap.nelements = nel
-			ap.eltype = GenParm(f, depth+1, false)
+			ap.eltype = s.GenParm(f, depth+1, false, pidx)
 			return ap
 		}
 	case which < tf[2]:
@@ -510,25 +544,25 @@ func GenParm(f *funcdef, depth int, mkctl bool) parm {
 	return ip
 }
 
-func GenReturn(f *funcdef, depth int) parm {
-	return GenParm(f, depth, false)
+func (s *genstate) GenReturn(f *funcdef, depth int, pidx int) parm {
+	return s.GenParm(f, depth, false, pidx)
 }
 
-func GenFunc(fidx int) funcdef {
+func (s *genstate) GenFunc(fidx int, pidx int) funcdef {
 	var f funcdef
 	f.idx = fidx
 	numParams := rand.Intn(6)
 	numReturns := rand.Intn(5)
 	needControl := tunables.EmitRecur
 	for pi := 0; pi < numParams; pi++ {
-		newparm := GenParm(&f, 0, needControl)
+		newparm := s.GenParm(&f, 0, needControl, pidx)
 		if newparm.IsControl() {
 			needControl = false
 		}
 		f.params = append(f.params, newparm)
 	}
 	for ri := 0; ri < numReturns; ri++ {
-		f.returns = append(f.returns, GenReturn(&f, 0))
+		f.returns = append(f.returns, s.GenReturn(&f, 0, pidx))
 	}
 	return f
 }
@@ -537,7 +571,7 @@ func emitStructAndArrayDefs(f *funcdef, b *bytes.Buffer) {
 	for _, s := range f.structdefs {
 		b.WriteString(fmt.Sprintf("type %s struct {\n", s.sname))
 		for fi, sp := range s.fields {
-			sp.Declare(b, "F", "\n", fi)
+			sp.Declare(b, "F", "\n", fi, false)
 		}
 		b.WriteString("}\n\n")
 	}
@@ -547,7 +581,7 @@ func emitStructAndArrayDefs(f *funcdef, b *bytes.Buffer) {
 	}
 }
 
-func emitCaller(f *funcdef, b *bytes.Buffer) {
+func (s *genstate) emitCaller(f *funcdef, b *bytes.Buffer, pidx int) {
 
 	b.WriteString(fmt.Sprintf("func Caller%d() {\n", f.idx))
 
@@ -555,19 +589,19 @@ func emitCaller(f *funcdef, b *bytes.Buffer) {
 	var value int = 1
 	for ri, r := range f.returns {
 		var valstr string
-		valstr, value = r.GenValue(value)
+		valstr, value = r.GenValue(value, true)
 		b.WriteString(fmt.Sprintf("  c%d := %s\n", ri, valstr))
 	}
 
 	// generate param constants
 	value = 1
 	for pi, p := range f.params {
-		p.Declare(b, "  var p", "\n", pi)
+		p.Declare(b, "  var p", "\n", pi, true)
 		var valstr string
 		if p.IsControl() {
 			valstr = "10"
 		} else {
-			valstr, value = p.GenValue(value)
+			valstr, value = p.GenValue(value, true)
 		}
 		b.WriteString(fmt.Sprintf("  p%d = %s\n", pi, valstr))
 	}
@@ -583,7 +617,7 @@ func emitCaller(f *funcdef, b *bytes.Buffer) {
 	if len(f.returns) > 0 {
 		b.WriteString(" := ")
 	}
-	b.WriteString(fmt.Sprintf("Test%d(", f.idx))
+	b.WriteString(fmt.Sprintf("%s.Test%d(", s.checkerPkg(pidx), f.idx))
 	for pi, _ := range f.params {
 		writeCom(b, pi)
 		b.WriteString(fmt.Sprintf("p%d", pi))
@@ -593,14 +627,15 @@ func emitCaller(f *funcdef, b *bytes.Buffer) {
 	// checking values returned
 	for ri, _ := range f.returns {
 		b.WriteString(fmt.Sprintf("  if r%d != c%d {\n", ri, ri))
-		b.WriteString(fmt.Sprintf("    NoteFailure(%d, \"return\", %d)\n", f.idx, ri))
+		b.WriteString(fmt.Sprintf("    %s.NoteFailure(%d, \"return\", %d)\n",
+			s.utilsPkg(), f.idx, ri))
 		b.WriteString("  }\n")
 	}
 
 	b.WriteString("}\n\n")
 }
 
-func emitChecker(f *funcdef, b *bytes.Buffer) {
+func (s *genstate) emitChecker(f *funcdef, b *bytes.Buffer, pidx int) {
 	verb(4, "emitting struct and array defs")
 	emitStructAndArrayDefs(f, b)
 	b.WriteString(fmt.Sprintf("// %d returns %d params\n", len(f.returns), len(f.params)))
@@ -609,7 +644,7 @@ func emitChecker(f *funcdef, b *bytes.Buffer) {
 	// params
 	for pi, p := range f.params {
 		writeCom(b, pi)
-		p.Declare(b, "p", "", pi)
+		p.Declare(b, "p", "", pi, false)
 	}
 	b.WriteString(") ")
 
@@ -619,7 +654,7 @@ func emitChecker(f *funcdef, b *bytes.Buffer) {
 	}
 	for ri, r := range f.returns {
 		writeCom(b, ri)
-		r.Declare(b, "r", "", ri)
+		r.Declare(b, "r", "", ri, false)
 	}
 	if len(f.returns) > 0 {
 		b.WriteString(")")
@@ -630,7 +665,7 @@ func emitChecker(f *funcdef, b *bytes.Buffer) {
 	value := 1
 	for ri, r := range f.returns {
 		var valstr string
-		valstr, value = r.GenValue(value)
+		valstr, value = r.GenValue(value, false)
 		b.WriteString(fmt.Sprintf("  rc%d := %s\n", ri, valstr))
 	}
 
@@ -650,12 +685,12 @@ func emitChecker(f *funcdef, b *bytes.Buffer) {
 				var valstr string
 				verb(4, "emitting check-code for p%d el %d", pi, i)
 				elref, elparm := p.GenElemRef(i, fmt.Sprintf("p%d", pi))
-				valstr, value = elparm.GenValue(value)
+				valstr, value = elparm.GenValue(value, false)
 				if elref == "" {
 					continue
 				}
 				b.WriteString(fmt.Sprintf("  if %s != %s {\n", elref, valstr))
-				b.WriteString(fmt.Sprintf("    NoteFailureElem(%d, \"parm\", %d, %d)\n", f.idx, pi, i))
+				b.WriteString(fmt.Sprintf("    %s.NoteFailureElem(%d, \"parm\", %d, %d)\n", s.utilsPkg(), f.idx, pi, i))
 				b.WriteString("    return\n")
 				b.WriteString("  }\n")
 			}
@@ -700,19 +735,19 @@ func emitReturnConst(f *funcdef, b *bytes.Buffer) {
 	b.WriteString("\n")
 }
 
-func GenPair(calloutfile *os.File, checkoutfile *os.File, fidx int, b *bytes.Buffer, seed int64, emit bool) int64 {
+func (s *genstate) GenPair(calloutfile *os.File, checkoutfile *os.File, fidx int, pidx int, b *bytes.Buffer, seed int64, emit bool) int64 {
 
-	verb(1, "gen fidx %d", fidx)
+	verb(1, "gen fidx %d pidx %d", fidx, pidx)
 
 	checkTunables(tunables)
 
 	// Generate a function with a random number of params and returns
-	f := GenFunc(fidx)
+	f := s.GenFunc(fidx, pidx)
 	var fp *funcdef = &f
 
 	// Emit caller side
 	rand.Seed(seed)
-	emitCaller(fp, b)
+	s.emitCaller(fp, b, pidx)
 	if emit {
 		b.WriteTo(calloutfile)
 	}
@@ -720,7 +755,7 @@ func GenPair(calloutfile *os.File, checkoutfile *os.File, fidx int, b *bytes.Buf
 
 	// Emit checker side
 	rand.Seed(seed)
-	emitChecker(fp, b)
+	s.emitChecker(fp, b, pidx)
 	if emit {
 		b.WriteTo(checkoutfile)
 	}
@@ -737,7 +772,7 @@ func openOutputFile(filename string, pk string, imports []string, ipref string) 
 	}
 	outf.WriteString(fmt.Sprintf("package %s\n\n", pk))
 	for _, imp := range imports {
-		outf.WriteString(fmt.Sprintf("import . \"%s%s\"\n", ipref, imp))
+		outf.WriteString(fmt.Sprintf("import \"%s%s\"\n", ipref, imp))
 	}
 	outf.WriteString("\n")
 	return outf
@@ -765,19 +800,22 @@ func emitUtils(outf *os.File) {
 	fmt.Fprintf(outf, "}\n\n")
 }
 
-func emitMain(outf *os.File, numit int) {
+func (s *genstate) emitMain(outf *os.File, numit int) {
 	fmt.Fprintf(outf, "import \"fmt\"\n")
 	fmt.Fprintf(outf, "import \"os\"\n\n")
 	fmt.Fprintf(outf, "func main() {\n")
 	fmt.Fprintf(outf, "  fmt.Fprintf(os.Stderr, \"starting main\\n\")\n")
-	for i := 0; i < numit; i++ {
-		fmt.Fprintf(outf, "  Caller%d()\n", i)
+	for k := 0; k < s.numtpk; k++ {
+		cp := fmt.Sprintf("%sCaller%d", s.tag, k)
+		for i := 0; i < numit; i++ {
+			fmt.Fprintf(outf, "  %s.Caller%d()\n", cp, i)
+		}
 	}
-	fmt.Fprintf(outf, "  if FailCount != 0 {\n")
-	fmt.Fprintf(outf, "    fmt.Fprintf(os.Stderr, \"FAILURES: %%d\\n\", FailCount)\n")
+	fmt.Fprintf(outf, "  if %s.FailCount != 0 {\n", s.utilsPkg())
+	fmt.Fprintf(outf, "    fmt.Fprintf(os.Stderr, \"FAILURES: %%d\\n\", %s.FailCount)\n", s.utilsPkg())
 	fmt.Fprintf(outf, "    os.Exit(2)\n")
 	fmt.Fprintf(outf, "  }\n")
-	fmt.Fprintf(outf, "  fmt.Fprintf(os.Stderr, \"finished %d tests\\n\")\n", numit)
+	fmt.Fprintf(outf, "  fmt.Fprintf(os.Stderr, \"finished %d tests\\n\")\n", numit*s.numtpk)
 	fmt.Fprintf(outf, "}\n")
 }
 
@@ -786,10 +824,36 @@ func makeDir(d string) {
 	os.Mkdir(d, 0777)
 }
 
-func Generate(tag string, outdir string, pkgpath string, numit int, seed int64, fcnmask map[int]int) {
-	callerpkg := tag + "Caller"
-	checkerpkg := tag + "Checker"
-	utilspkg := tag + "Utils"
+type genstate struct {
+	outdir string
+	ipref  string
+	tag    string
+	numtpk int
+}
+
+func (s *genstate) callerPkg(which int) string {
+	return s.tag + "Caller" + strconv.Itoa(which)
+}
+
+func (s *genstate) callerFile(which int) string {
+	cp := s.callerPkg(which)
+	return s.outdir + "/" + cp + "/" + cp + ".go"
+}
+
+func (s *genstate) checkerPkg(which int) string {
+	return s.tag + "Checker" + strconv.Itoa(which)
+}
+
+func (s *genstate) checkerFile(which int) string {
+	cp := s.checkerPkg(which)
+	return s.outdir + "/" + cp + "/" + cp + ".go"
+}
+
+func (s *genstate) utilsPkg() string {
+	return s.tag + "Utils"
+}
+
+func Generate(tag string, outdir string, pkgpath string, numit int, numtpkgs int, seed int64, fcnmask map[int]int) {
 	mainpkg := tag + "Main"
 
 	var ipref string
@@ -797,46 +861,63 @@ func Generate(tag string, outdir string, pkgpath string, numit int, seed int64, 
 		ipref = pkgpath + "/"
 	}
 
+	s := genstate{outdir: outdir, ipref: ipref, tag: tag, numtpk: numtpkgs}
+
 	if outdir != "." {
 		makeDir(outdir)
 	}
 	verb(1, "creating %s", outdir)
-	makeDir(outdir + "/" + callerpkg)
-	makeDir(outdir + "/" + callerpkg)
-	makeDir(outdir + "/" + checkerpkg)
-	makeDir(outdir + "/" + utilspkg)
 
-	callerfile := outdir + "/" + callerpkg + "/" + callerpkg + ".go"
-	checkerfile := outdir + "/" + checkerpkg + "/" + checkerpkg + ".go"
-	utilsfile := outdir + "/" + utilspkg + "/" + utilspkg + ".go"
-	mainfile := outdir + "/" + mainpkg + ".go"
+	mainimports := []string{}
+	for i := 0; i < numtpkgs; i++ {
+		makeDir(outdir + "/" + s.callerPkg(i))
+		makeDir(outdir + "/" + s.checkerPkg(i))
+		makeDir(outdir + "/" + s.utilsPkg())
+		mainimports = append(mainimports, s.callerPkg(i))
+	}
+	mainimports = append(mainimports, s.utilsPkg())
 
-	verb(1, "files: %s %s %s %s", callerfile, checkerfile, utilsfile, mainfile)
-
-	calleroutfile := openOutputFile(callerfile, callerpkg,
-		[]string{checkerpkg, utilspkg}, ipref)
-	checkeroutfile := openOutputFile(checkerfile, checkerpkg,
-		[]string{utilspkg}, ipref)
-	utilsoutfile := openOutputFile(utilsfile, utilspkg, []string{}, "")
-	mainoutfile := openOutputFile(mainfile, "main", []string{callerpkg, utilspkg}, ipref)
-
+	utilsfile := outdir + "/" + s.utilsPkg() + "/" + s.utilsPkg() + ".go"
+	utilsoutfile := openOutputFile(utilsfile, s.utilsPkg(), []string{}, "")
 	verb(1, "emit utils")
 	emitUtils(utilsoutfile)
-	emitMain(mainoutfile, numit)
-	var b bytes.Buffer
-	for i := 0; i < numit; i++ {
-		doemit := false
-		if len(fcnmask) == 0 {
-			doemit = true
-		} else if _, ok := fcnmask[i]; ok {
-			doemit = true
+	utilsoutfile.Close()
+
+	mainfile := outdir + "/" + mainpkg + ".go"
+	mainoutfile := openOutputFile(mainfile, "main", mainimports, ipref)
+
+	for k := 0; k < numtpkgs; k++ {
+		calleroutfile := openOutputFile(s.callerFile(k), s.callerPkg(k),
+			[]string{s.checkerPkg(k), s.utilsPkg()}, ipref)
+		checkeroutfile := openOutputFile(s.checkerFile(k), s.checkerPkg(k),
+			[]string{s.utilsPkg()}, ipref)
+
+		var b bytes.Buffer
+		for i := 0; i < numit; i++ {
+			doemit := false
+			if len(fcnmask) == 0 {
+				doemit = true
+			} else if _, ok := fcnmask[i]; ok {
+				doemit = true
+			}
+			seed = s.GenPair(calleroutfile, checkeroutfile, i, k,
+				&b, seed, doemit)
 		}
-		seed = GenPair(calleroutfile, checkeroutfile, i, &b, seed, doemit)
+		calleroutfile.Close()
+		checkeroutfile.Close()
 	}
+	s.emitMain(mainoutfile, numit)
+
+	// emit go.mod
+	verb(1, "opening go.mod")
+	fn := outdir + "/go.mod"
+	outf, err := os.OpenFile(fn, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0666)
+	if err != nil {
+		log.Fatal(err)
+	}
+	outf.WriteString(fmt.Sprintf("module %s\n\ngo 1.15\n", pkgpath))
+	outf.Close()
 
 	verb(1, "closing files")
-	utilsoutfile.Close()
-	calleroutfile.Close()
-	checkeroutfile.Close()
 	mainoutfile.Close()
 }

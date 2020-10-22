@@ -22,6 +22,7 @@ var recurflag = flag.Bool("r", true, "Emit recursive calls")
 var tagflag = flag.String("t", "gen", "Prefix name of go files/pkgs to generate")
 var outdirflag = flag.String("o", "", "Output directory for generated files")
 var pkgpathflag = flag.String("p", "", "Base package path for generated files")
+var numtpkflag = flag.Int("q", 1, "Number of test packages")
 var maskflag = flag.String("M", "", "Mask containing list of fcn numbers to emit")
 
 func verb(vlevel int, s string, a ...interface{}) {
@@ -76,6 +77,6 @@ func main() {
 	tunables.EmitRecur = *recurflag
 	generator.SetTunables(tunables)
 	generator.Generate(*tagflag, *outdirflag, *pkgpathflag,
-		*numitflag, *seedflag, fcnmask)
+		*numitflag, *numtpkflag, *seedflag, fcnmask)
 	verb(1, "leaving main")
 }

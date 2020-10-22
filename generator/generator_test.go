@@ -70,7 +70,7 @@ func TestIsBuildable(t *testing.T) {
 	checkTunables(tunables)
 	pack := filepath.Base(td)
 	fcnmask := make(map[int]int)
-	Generate("x", td, pack, 1000, int64(0), fcnmask)
+	Generate("x", td, pack, 10, int64(0), fcnmask)
 
 	verb(1, "building %s\n", td)
 
