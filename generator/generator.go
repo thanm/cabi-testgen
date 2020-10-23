@@ -45,10 +45,10 @@ type TunableParams struct {
 	structDepth uint8
 
 	// Fraction of param and return types assigned to each
-	// category: struct/array/int/float/pointer at the top
+	// category: struct/array/int/float/complex/byte/pointer at the top
 	// level. If nesting precludes using a struct, other types
 	// are chosen from instead according to same proportions.
-	typeFractions [5]uint8
+	typeFractions [7]uint8
 
 	// Whether we try to emit recurive calls
 	EmitRecur bool
@@ -57,13 +57,13 @@ type TunableParams struct {
 var tunables = TunableParams{
 	nParmRange:     20,
 	nReturnRange:   10,
-	nStructFields:  5,
+	nStructFields:  7,
 	nArrayElements: 5,
 	intBitRanges:   [4]uint8{30, 20, 20, 30},
 	floatBitRanges: [2]uint8{50, 50},
 	unsignedRanges: [2]uint8{50, 50},
-	structDepth:    1,
-	typeFractions:  [5]uint8{35, 15, 30, 20, 0},
+	structDepth:    3,
+	typeFractions:  [7]uint8{30, 15, 20, 15, 5, 10, 5},
 	EmitRecur:      true,
 }
 
@@ -147,6 +147,9 @@ var f32parm *numparm = &numparm{"float", uint32(32), false}
 var f64parm *numparm = &numparm{"float", uint32(64), false}
 
 func (p numparm) TypeName() string {
+	if p.tag == "byte" {
+		return "byte"
+	}
 	return fmt.Sprintf("%s%d", p.tag, p.widthInBits)
 }
 
@@ -155,6 +158,9 @@ func (p numparm) QualName() string {
 }
 
 func (p numparm) String() string {
+	if p.tag == "byte" {
+		return "byte"
+	}
 	ctl := ""
 	if p.ctl {
 		ctl = " [ctl=yes]"
@@ -175,7 +181,11 @@ func (p numparm) GenElemRef(elidx int, path string) (string, parm) {
 }
 
 func (p numparm) Declare(b *bytes.Buffer, prefix string, suffix string, parmNo int, caller bool) {
-	b.WriteString(fmt.Sprintf("%s%d %s%d%s", prefix, parmNo, p.tag, p.widthInBits, suffix))
+	t := fmt.Sprintf("%s%d%s", p.tag, p.widthInBits, suffix)
+	if p.tag == "byte" {
+		t = fmt.Sprintf("%s%s", p.tag, suffix)
+	}
+	b.WriteString(fmt.Sprintf("%s%d %s", prefix, parmNo, t))
 }
 
 func (p numparm) genRandNum(value int) (string, int) {
@@ -185,6 +195,7 @@ func (p numparm) genRandNum(value int) (string, int) {
 		if which < 3 {
 			// max
 			v = (1 << (p.widthInBits - 1)) - 1
+
 		} else if which < 5 {
 			// min
 			v = (-1 << (p.widthInBits - 1))
@@ -196,7 +207,7 @@ func (p numparm) genRandNum(value int) (string, int) {
 		}
 		return fmt.Sprintf("%s%d(%d)", p.tag, p.widthInBits, v), value + 1
 	}
-	if p.tag == "uint" {
+	if p.tag == "uint" || p.tag == "byte" {
 		var v int
 		if which < 3 {
 			// max
@@ -204,6 +215,9 @@ func (p numparm) genRandNum(value int) (string, int) {
 		}
 		nrange := 1 << (p.widthInBits - 2)
 		v = rand.Intn(nrange)
+		if p.tag == "byte" {
+			return fmt.Sprintf("%s(%d)", p.tag, v), value + 1
+		}
 		return fmt.Sprintf("%s%d(%d)", p.tag, p.widthInBits, v), value + 1
 	}
 	if p.tag == "float" {
@@ -225,15 +239,15 @@ func (p numparm) genRandNum(value int) (string, int) {
 		panic("unknown float type")
 	}
 	if p.tag == "complex" {
-		if p.widthInBits == 32 {
+		if p.widthInBits == 64 {
 			f1, v2 := f32parm.genRandNum(value)
 			f2, v3 := f32parm.genRandNum(v2)
-			return fmt.Sprintf("complex32(%s,%s)", f1, f2), v3
+			return fmt.Sprintf("complex(%s,%s)", f1, f2), v3
 		}
-		if p.widthInBits == 64 {
+		if p.widthInBits == 128 {
 			f1, v2 := f64parm.genRandNum(value)
 			f2, v3 := f64parm.genRandNum(v2)
-			return fmt.Sprintf("complex64(%v,%v)", f1, f2), v3
+			return fmt.Sprintf("complex(%v,%v)", f1, f2), v3
 		}
 		panic("unknown complex type")
 	}
@@ -315,9 +329,9 @@ func (p structparm) GenElemRef(elidx int, path string) (string, parm) {
 
 		verb(4, "+ examining field %d fne %d ct %d", fi, fne, ct)
 
-		// For empty arrays/structs, convention is to return empty string
-		if fne == 0 {
-			return "", f
+		// Empty field. Continue on.
+		if elidx == ct && fne == 0 {
+			continue
 		}
 
 		// Is this field the element we're interested in?
@@ -415,6 +429,51 @@ func (p arrayparm) NumElements() int {
 	return p.eltype.NumElements() * int(p.nelements)
 }
 
+type pointerparm struct {
+	tag    string
+	totype parm
+}
+
+func (p pointerparm) Declare(b *bytes.Buffer, prefix string, suffix string, parmNo int, caller bool) {
+	n := p.totype.TypeName()
+	if caller {
+		n = p.totype.QualName()
+	}
+	b.WriteString(fmt.Sprintf("%s%d *%s%s", prefix, parmNo, n, suffix))
+}
+
+func (p pointerparm) GenElemRef(elidx int, path string) (string, parm) {
+	return path, p
+}
+
+func (p pointerparm) GenValue(value int, caller bool) (string, int) {
+	n := p.totype.TypeName()
+	if caller {
+		n = p.totype.QualName()
+	}
+	return fmt.Sprintf("(*%s)(nil)", n), value
+}
+
+func (p pointerparm) IsControl() bool {
+	return false
+}
+
+func (p pointerparm) NumElements() int {
+	return 1
+}
+
+func (p pointerparm) String() string {
+	return fmt.Sprintf("*%s", p.totype)
+}
+
+func (p pointerparm) TypeName() string {
+	return fmt.Sprintf("*%s", p.totype.TypeName())
+}
+
+func (p pointerparm) QualName() string {
+	return fmt.Sprintf("*%s", p.totype.QualName())
+}
+
 type funcdef struct {
 	idx        int
 	structdefs []*structparm
@@ -471,8 +530,8 @@ func (s *genstate) GenParm(f *funcdef, depth int, mkctl bool, pidx int) parm {
 	// Convert tf into a cumulative sum
 	sum := uint8(0)
 	for i := 0; i < len(tf); i++ {
-		tf[i] += sum
 		sum += tf[i]
+		tf[i] = sum
 	}
 	for i := 2; i < len(tf); i++ {
 		tf[i] += off
@@ -492,7 +551,8 @@ func (s *genstate) GenParm(f *funcdef, depth int, mkctl bool, pidx int) parm {
 			sp.qname = fmt.Sprintf("%s.StructF%dS%d",
 				s.checkerPkg(pidx), f.idx, ns)
 			f.structdefs = append(f.structdefs, sp)
-			nf := rand.Intn(int(tunables.nStructFields))
+			tnf := int(tunables.nStructFields) / int(depth+1)
+			nf := rand.Intn(tnf)
 			for fi := 0; fi < nf; fi++ {
 				sp.fields = append(sp.fields, s.GenParm(f, depth+1, false, pidx))
 			}
@@ -532,8 +592,22 @@ func (s *genstate) GenParm(f *funcdef, depth int, mkctl bool, pidx int) parm {
 		{
 			var fp numparm
 			fp.tag = "complex"
-			fp.widthInBits = floatBits()
+			fp.widthInBits = floatBits() * 2
 			return fp
+		}
+	case which < tf[5]:
+		{
+			var bp numparm
+			bp.tag = "byte"
+			bp.widthInBits = 8
+			return bp
+		}
+	case which < tf[6]:
+		{
+			var pp pointerparm
+			pp.tag = "pointer"
+			pp.totype = s.GenParm(f, depth, false, pidx)
+			return pp
 		}
 	}
 
@@ -673,7 +747,7 @@ func (s *genstate) emitChecker(f *funcdef, b *bytes.Buffer, pidx int) {
 	value = 1
 	haveControl := false
 	for pi, p := range f.params {
-		verb(4, "emitting param checking code for p%d", pi)
+		verb(4, "emitting parm checking code for p%d numel=%d pt=%s", pi, p.NumElements(), p.TypeName())
 		if p.IsControl() {
 			b.WriteString(fmt.Sprintf("  if p%d == 0 {\n", pi))
 			emitReturnConst(f, b)
@@ -687,9 +761,11 @@ func (s *genstate) emitChecker(f *funcdef, b *bytes.Buffer, pidx int) {
 				elref, elparm := p.GenElemRef(i, fmt.Sprintf("p%d", pi))
 				valstr, value = elparm.GenValue(value, false)
 				if elref == "" {
+					verb(4, "empty skip p%d el %d", pi, i)
 					continue
 				}
-				b.WriteString(fmt.Sprintf("  if %s != %s {\n", elref, valstr))
+				b.WriteString(fmt.Sprintf("  p%df%dc := %s\n", pi, i, valstr))
+				b.WriteString(fmt.Sprintf("  if %s != p%df%dc {\n", elref, pi, i))
 				b.WriteString(fmt.Sprintf("    %s.NoteFailureElem(%d, \"parm\", %d, %d)\n", s.utilsPkg(), f.idx, pi, i))
 				b.WriteString("    return\n")
 				b.WriteString("  }\n")
