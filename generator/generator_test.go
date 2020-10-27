@@ -2,7 +2,6 @@ package generator
 
 import (
 	"bytes"
-	"fmt"
 	"io/ioutil"
 	"math/rand"
 	"os"
@@ -14,13 +13,14 @@ import (
 func TestBasic(t *testing.T) {
 	rand.Seed(0)
 	checkTunables(tunables)
+	s := &genstate{outdir: "/tmp", ipref: "foo/", tag: "gen", numtpk: 1}
 	for i := 0; i < 1000; i++ {
-		f := GenFunc(i)
+		f := s.GenFunc(i, i)
 		var fp *funcdef = &f
 		var buf bytes.Buffer
 		var b *bytes.Buffer = &buf
-		emitCaller(fp, b)
-		emitChecker(fp, b)
+		s.emitCaller(fp, b, i)
+		s.emitChecker(fp, b, i)
 	}
 }
 
@@ -34,31 +34,25 @@ func TestMoreComplicated(t *testing.T) {
 	tunables.typeFractions[0] -= 10
 	tunables.typeFractions[4] += 10
 
-	// Verbctl = 5
-
 	checkTunables(tunables)
+	s := &genstate{outdir: "/tmp", ipref: "foo/", tag: "gen", numtpk: 1}
 	for i := 0; i < 10000; i++ {
-		f := GenFunc(i)
+		f := s.GenFunc(i, i)
 		var fp *funcdef = &f
 		var buf bytes.Buffer
 		var b *bytes.Buffer = &buf
-		emitCaller(fp, b)
+		s.emitCaller(fp, b, i)
 		verb(1, "finished iter %d caller", i)
-		emitChecker(fp, b)
+		s.emitChecker(fp, b, i)
 		verb(1, "finished iter %d checker", i)
 	}
 }
 
 func TestIsBuildable(t *testing.T) {
-	// Verbctl = 2
 
-	gopath := os.Getenv("GOPATH")
-	if len(gopath) == 0 {
-		t.Errorf("something very screwy going on here, no GOPATH")
-	}
+	//Verbctl = 2
 
-	gosrc := fmt.Sprintf("%s/src", gopath)
-	td, err := ioutil.TempDir(gosrc, "cabi-testgen")
+	td, err := ioutil.TempDir("", "cabi-testgen")
 	if err != nil {
 		t.Errorf("can't create temp dir")
 	}
@@ -70,12 +64,12 @@ func TestIsBuildable(t *testing.T) {
 	checkTunables(tunables)
 	pack := filepath.Base(td)
 	fcnmask := make(map[int]int)
-	Generate("x", td, pack, 10, int64(0), fcnmask)
+	Generate("x", td, pack, 10, 10, int64(0), fcnmask)
 
 	verb(1, "building %s\n", td)
 
-	mainfile := fmt.Sprintf("%s/xMain.go", td)
-	cmd := exec.Command("go", "run", mainfile)
+	cmd := exec.Command("go", "run", ".")
+	cmd.Dir = td
 	coutput, cerr := cmd.CombinedOutput()
 	if cerr != nil {
 		t.Errorf("go build command failed: %s\n", string(coutput))
