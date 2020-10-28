@@ -74,7 +74,10 @@ func main() {
 	verb(1, "starting generation")
 	tunables := generator.DefaultTunables()
 	generator.SetTunables(tunables)
-	generator.Generate(*tagflag, *outdirflag, *pkgpathflag,
+	errs := generator.Generate(*tagflag, *outdirflag, *pkgpathflag,
 		*numitflag, *numtpkflag, *seedflag, fcnmask)
+	if errs != 0 {
+		log.Fatal("errors during generation")
+	}
 	verb(1, "leaving main")
 }

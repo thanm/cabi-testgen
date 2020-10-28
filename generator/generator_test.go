@@ -22,6 +22,9 @@ func TestBasic(t *testing.T) {
 		s.emitCaller(fp, b, i)
 		s.emitChecker(fp, b, i)
 	}
+	if s.errs != 0 {
+		t.Errorf("%d errors during Generate", s.errs)
+	}
 }
 
 func TestMoreComplicated(t *testing.T) {
@@ -40,6 +43,9 @@ func TestMoreComplicated(t *testing.T) {
 		verb(1, "finished iter %d caller", i)
 		s.emitChecker(fp, b, i)
 		verb(1, "finished iter %d checker", i)
+		if s.errs != 0 {
+			t.Errorf("%d errors during Generate iter %d", s.errs, i)
+		}
 	}
 }
 
@@ -55,14 +61,14 @@ func TestIsBuildable(t *testing.T) {
 
 	verb(1, "generating into temp dir %s", td)
 
-	// Turn on blanks
-	tunables.blankPerc = 20
-
 	rand.Seed(1)
 	checkTunables(tunables)
 	pack := filepath.Base(td)
 	fcnmask := make(map[int]int)
-	Generate("x", td, pack, 10, 1, int64(0), fcnmask)
+	errs := Generate("x", td, pack, 10, 10, int64(0), fcnmask)
+	if errs != 0 {
+		t.Errorf("%d errors during Generate", errs)
+	}
 
 	verb(1, "building %s\n", td)
 

@@ -9,6 +9,7 @@ import (
 	"math/rand"
 	"os"
 	"strconv"
+	"strings"
 )
 
 const (
@@ -147,16 +148,18 @@ type parm interface {
 	String() string
 	TypeName() string
 	QualName() string
+	IsBlank() bool
 }
 
 type numparm struct {
 	tag         string
 	widthInBits uint32
 	ctl         bool
+	blank       bool
 }
 
-var f32parm *numparm = &numparm{"float", uint32(32), false}
-var f64parm *numparm = &numparm{"float", uint32(64), false}
+var f32parm *numparm = &numparm{"float", uint32(32), false, false}
+var f64parm *numparm = &numparm{"float", uint32(64), false, false}
 
 func (p numparm) TypeName() string {
 	if p.tag == "byte" {
@@ -186,6 +189,10 @@ func (p numparm) NumElements() int {
 
 func (p numparm) IsControl() bool {
 	return p.ctl
+}
+
+func (p numparm) IsBlank() bool {
+	return p.blank
 }
 
 func (p numparm) GenElemRef(elidx int, path string) (string, parm) {
@@ -267,14 +274,16 @@ func (p numparm) genRandNum(value int) (string, int) {
 }
 
 func (p numparm) GenValue(value int, caller bool) (string, int) {
-	return p.genRandNum(value)
+	r, nv := p.genRandNum(value)
+	verb(5, "numparm.GenValue(%d) = %s", value, r)
+	return r, nv
 }
 
 type structparm struct {
 	sname  string
 	qname  string
 	fields []parm
-	blank  []bool
+	blank  bool
 }
 
 func (p structparm) TypeName() string {
@@ -294,7 +303,7 @@ func (p structparm) Declare(b *bytes.Buffer, prefix string, suffix string, calle
 }
 
 func (p structparm) FieldName(i int) string {
-	if p.blank[i] {
+	if p.fields[i].IsBlank() {
 		return "_"
 	}
 	return fmt.Sprintf("F%d", i)
@@ -314,6 +323,8 @@ func (p structparm) String() string {
 func (p structparm) GenValue(value int, caller bool) (string, int) {
 	var buf bytes.Buffer
 
+	verb(5, "structparm.GenValue(%d)", value)
+
 	n := p.sname
 	if caller {
 		n = p.qname
@@ -321,15 +332,22 @@ func (p structparm) GenValue(value int, caller bool) (string, int) {
 	buf.WriteString(fmt.Sprintf("%s{", n))
 	nbfi := 0
 	for fi, f := range p.fields {
-		if p.blank[fi] {
-			continue
-		}
 		var valstr string
-		writeCom(&buf, nbfi)
-		buf.WriteString(p.FieldName(fi) + ": ")
 		valstr, value = f.GenValue(value, caller)
+		if p.fields[fi].IsBlank() {
+			buf.WriteString("/* ")
+			valstr = strings.ReplaceAll(valstr, "/*", "[[")
+			valstr = strings.ReplaceAll(valstr, "*/", "]]")
+		} else {
+			writeCom(&buf, nbfi)
+		}
+		buf.WriteString(p.FieldName(fi) + ": ")
 		buf.WriteString(valstr)
-		nbfi++
+		if p.fields[fi].IsBlank() {
+			buf.WriteString(" */")
+		} else {
+			nbfi++
+		}
 	}
 	buf.WriteString("}")
 	return buf.String(), value
@@ -339,12 +357,13 @@ func (p structparm) IsControl() bool {
 	return false
 }
 
+func (p structparm) IsBlank() bool {
+	return p.blank
+}
+
 func (p structparm) NumElements() int {
 	ne := 0
-	for fi, f := range p.fields {
-		if p.blank[fi] {
-			continue
-		}
+	for _, f := range p.fields {
 		ne += f.NumElements()
 	}
 	return ne
@@ -352,14 +371,12 @@ func (p structparm) NumElements() int {
 
 func (p structparm) GenElemRef(elidx int, path string) (string, parm) {
 	ct := 0
-	verb(4, "begin GenElemRef(%d,%s) on %s", elidx, path, p.String())
+	//verb(4, "begin GenElemRef(%d,%s) on %s", elidx, path, p.String())
+
 	for fi, f := range p.fields {
 		fne := f.NumElements()
-		if p.blank[fi] {
-			continue
-		}
 
-		verb(4, "+ examining field %d fne %d ct %d", fi, fne, ct)
+		//verb(4, "+ examining field %d fne %d ct %d", fi, fne, ct)
 
 		// Empty field. Continue on.
 		if elidx == ct && fne == 0 {
@@ -368,13 +385,20 @@ func (p structparm) GenElemRef(elidx int, path string) (string, parm) {
 
 		// Is this field the element we're interested in?
 		if fne == 1 && elidx == ct {
-			verb(4, "found field %d type %s in GenElemRef(%d,%s)", fi, f.String(), elidx, path)
-			return fmt.Sprintf("%s.F%d", path, fi), f
+			verb(4, "found field %d type %s in GenElemRef(%d,%s)", fi, f.TypeName(), elidx, path)
+			ppath := fmt.Sprintf("%s.F%d", path, fi)
+			if p.fields[fi].IsBlank() || path == "_" {
+				ppath = "_"
+			}
+			return ppath, f
 		}
 
 		// Is the element we want somewhere inside this field?
 		if fne > 1 && elidx >= ct && elidx < ct+fne {
 			ppath := fmt.Sprintf("%s.F%d", path, fi)
+			if p.fields[fi].IsBlank() || path == "_" {
+				ppath = "_"
+			}
 			return f.GenElemRef(elidx-ct, ppath)
 		}
 
@@ -388,10 +412,15 @@ type arrayparm struct {
 	qname     string
 	nelements uint8
 	eltype    parm
+	blank     bool
 }
 
 func (p arrayparm) IsControl() bool {
 	return false
+}
+
+func (p arrayparm) IsBlank() bool {
+	return p.blank
 }
 
 func (p arrayparm) TypeName() string {
@@ -416,6 +445,8 @@ func (p arrayparm) String() string {
 
 func (p arrayparm) GenValue(value int, caller bool) (string, int) {
 	var buf bytes.Buffer
+
+	verb(5, "arrayparm.GenValue(%d)", value)
 
 	n := p.aname
 	if caller {
@@ -446,14 +477,21 @@ func (p arrayparm) GenElemRef(elidx int, path string) (string, parm) {
 
 	// If this is the element we're interested in, return it
 	if ene == 1 {
-		verb(4, "hit scalar element")
-		return fmt.Sprintf("%s[%d]", path, slot), p.eltype
+		//verb(4, "hit scalar element")
+		epath := fmt.Sprintf("%s[%d]", path, slot)
+		if path == "_" || p.IsBlank() {
+			epath = "_"
+		}
+		return epath, p.eltype
 	}
 
 	verb(4, "recur slot=%d GenElemRef(%d,...)", slot, elidx-(slot*ene))
 
 	// Otherwise our victim is somewhere inside the slot
 	ppath := fmt.Sprintf("%s[%d]", path, slot)
+	if p.IsBlank() {
+		ppath = "_"
+	}
 	return p.eltype.GenElemRef(elidx-(slot*ene), ppath)
 }
 
@@ -464,6 +502,7 @@ func (p arrayparm) NumElements() int {
 type pointerparm struct {
 	tag    string
 	totype parm
+	blank  bool
 }
 
 func (p pointerparm) Declare(b *bytes.Buffer, prefix string, suffix string, caller bool) {
@@ -490,6 +529,10 @@ func (p pointerparm) IsControl() bool {
 	return false
 }
 
+func (p pointerparm) IsBlank() bool {
+	return p.blank
+}
+
 func (p pointerparm) NumElements() int {
 	return 1
 }
@@ -512,6 +555,7 @@ type funcdef struct {
 	arraydefs  []*arrayparm
 	params     []parm
 	returns    []parm
+	values     []int
 	recur      bool
 }
 
@@ -570,6 +614,8 @@ func (s *genstate) GenParm(f *funcdef, depth int, mkctl bool, pidx int) parm {
 		tf[i] += off
 	}
 
+	isblank := uint8(rand.Intn(100)) < tunables.blankPerc
+
 	// Make adjusted selection (pick a bucket within tf)
 	which := uint8(rand.Intn(amt)) + off
 	switch {
@@ -589,9 +635,8 @@ func (s *genstate) GenParm(f *funcdef, depth int, mkctl bool, pidx int) parm {
 			for fi := 0; fi < nf; fi++ {
 				fp := s.GenParm(f, depth+1, false, pidx)
 				sp.fields = append(sp.fields, fp)
-				isblank := uint8(rand.Intn(100)) < tunables.blankPerc
-				sp.blank = append(sp.blank, isblank)
 			}
+			sp.blank = isblank
 			return sp
 		}
 	case which < tf[1]:
@@ -605,6 +650,7 @@ func (s *genstate) GenParm(f *funcdef, depth int, mkctl bool, pidx int) parm {
 			f.arraydefs = append(f.arraydefs, ap)
 			ap.nelements = nel
 			ap.eltype = s.GenParm(f, depth+1, false, pidx)
+			ap.blank = isblank
 			return ap
 		}
 	case which < tf[2]:
@@ -614,6 +660,8 @@ func (s *genstate) GenParm(f *funcdef, depth int, mkctl bool, pidx int) parm {
 			ip.widthInBits = intBits()
 			if mkctl {
 				ip.ctl = true
+			} else {
+				ip.blank = isblank
 			}
 			return ip
 		}
@@ -622,6 +670,7 @@ func (s *genstate) GenParm(f *funcdef, depth int, mkctl bool, pidx int) parm {
 			var fp numparm
 			fp.tag = "float"
 			fp.widthInBits = floatBits()
+			fp.blank = isblank
 			return fp
 		}
 	case which < tf[4]:
@@ -629,6 +678,7 @@ func (s *genstate) GenParm(f *funcdef, depth int, mkctl bool, pidx int) parm {
 			var fp numparm
 			fp.tag = "complex"
 			fp.widthInBits = floatBits() * 2
+			fp.blank = isblank
 			return fp
 		}
 	case which < tf[5]:
@@ -636,6 +686,7 @@ func (s *genstate) GenParm(f *funcdef, depth int, mkctl bool, pidx int) parm {
 			var bp numparm
 			bp.tag = "byte"
 			bp.widthInBits = 8
+			bp.blank = isblank
 			return bp
 		}
 	case which < tf[6]:
@@ -643,6 +694,7 @@ func (s *genstate) GenParm(f *funcdef, depth int, mkctl bool, pidx int) parm {
 			var pp pointerparm
 			pp.tag = "pointer"
 			pp.totype = s.GenParm(f, depth, false, pidx)
+			pp.blank = isblank
 			return pp
 		}
 	}
@@ -671,6 +723,9 @@ func (s *genstate) GenFunc(fidx int, pidx int) funcdef {
 			needControl = false
 		}
 		f.params = append(f.params, newparm)
+	}
+	if f.recur && needControl {
+		f.recur = false
 	}
 	for ri := 0; ri < numReturns; ri++ {
 		f.returns = append(f.returns, s.GenReturn(&f, 0, pidx))
@@ -705,8 +760,8 @@ func (s *genstate) emitCaller(f *funcdef, b *bytes.Buffer, pidx int) {
 	}
 
 	// generate param constants
-	value = 1
 	for pi, p := range f.params {
+		verb(4, "emitCaller gen p%d value=%d", pi, value)
 		p.Declare(b, fmt.Sprintf("  var p%d", pi), "\n", true)
 		var valstr string
 		if p.IsControl() {
@@ -715,6 +770,7 @@ func (s *genstate) emitCaller(f *funcdef, b *bytes.Buffer, pidx int) {
 			valstr, value = p.GenValue(value, true)
 		}
 		b.WriteString(fmt.Sprintf("  p%d = %s\n", pi, valstr))
+		f.values = append(f.values, value)
 	}
 
 	// calling code
@@ -738,8 +794,7 @@ func (s *genstate) emitCaller(f *funcdef, b *bytes.Buffer, pidx int) {
 	// checking values returned
 	for ri, _ := range f.returns {
 		b.WriteString(fmt.Sprintf("  if r%d != c%d {\n", ri, ri))
-		b.WriteString(fmt.Sprintf("    %s.NoteFailure(%d, \"return\", %d)\n",
-			s.utilsPkg(), f.idx, ri))
+		b.WriteString(fmt.Sprintf("    %s.NoteFailure(%d, \"%s\", \"return\", %d)\n", s.utilsPkg(), f.idx, s.checkerPkg(pidx), ri))
 		b.WriteString("  }\n")
 	}
 
@@ -755,7 +810,11 @@ func (s *genstate) emitChecker(f *funcdef, b *bytes.Buffer, pidx int) {
 	// params
 	for pi, p := range f.params {
 		writeCom(b, pi)
-		p.Declare(b, fmt.Sprintf("p%d", pi), "", false)
+		n := fmt.Sprintf("p%d", pi)
+		if p.IsBlank() {
+			n = "_"
+		}
+		p.Declare(b, n, "", false)
 	}
 	b.WriteString(") ")
 
@@ -781,32 +840,45 @@ func (s *genstate) emitChecker(f *funcdef, b *bytes.Buffer, pidx int) {
 	}
 
 	// parameter checking code
-	value = 1
 	haveControl := false
 	for pi, p := range f.params {
-		verb(4, "emitting parm checking code for p%d numel=%d pt=%s", pi, p.NumElements(), p.TypeName())
+		verb(4, "emitting parm checking code for p%d numel=%d pt=%s value=%d", pi, p.NumElements(), p.TypeName(), value)
+
 		if p.IsControl() {
 			b.WriteString(fmt.Sprintf("  if p%d == 0 {\n", pi))
 			emitReturnConst(f, b)
 			b.WriteString("  }\n")
 			haveControl = true
+		} else if p.IsBlank() {
+			var valstr string
+			valstr, value = p.GenValue(value, false)
+			if f.recur {
+				b.WriteString(fmt.Sprintf("  brc%d := %s\n", pi, valstr))
+			} else {
+				b.WriteString(fmt.Sprintf("  _ = %s\n", valstr))
+			}
 		} else {
 			numel := p.NumElements()
 			for i := 0; i < numel; i++ {
 				var valstr string
-				verb(4, "emitting check-code for p%d el %d", pi, i)
+				verb(4, "emitting check-code for p%d el %d value=%d", pi, i, value)
 				elref, elparm := p.GenElemRef(i, fmt.Sprintf("p%d", pi))
 				valstr, value = elparm.GenValue(value, false)
-				if elref == "" {
+				if elref == "" || elref == "_" {
 					verb(4, "empty skip p%d el %d", pi, i)
 					continue
+				} else {
+					b.WriteString(fmt.Sprintf("  p%df%dc := %s\n", pi, i, valstr))
+					b.WriteString(fmt.Sprintf("  if %s != p%df%dc {\n", elref, pi, i))
+					b.WriteString(fmt.Sprintf("    %s.NoteFailureElem(%d, \"%s\", \"parm\", %d, %d)\n", s.utilsPkg(), f.idx, s.checkerPkg(pidx), pi, i))
+					b.WriteString("    return\n")
+					b.WriteString("  }\n")
 				}
-				b.WriteString(fmt.Sprintf("  p%df%dc := %s\n", pi, i, valstr))
-				b.WriteString(fmt.Sprintf("  if %s != p%df%dc {\n", elref, pi, i))
-				b.WriteString(fmt.Sprintf("    %s.NoteFailureElem(%d, \"parm\", %d, %d)\n", s.utilsPkg(), f.idx, pi, i))
-				b.WriteString("    return\n")
-				b.WriteString("  }\n")
 			}
+		}
+		if value != f.values[pi] {
+			fmt.Fprintf(os.Stderr, "internal error: checker/caller value mismatch after emitting param %d func Test%d pkg %s: caller %d checker %d\n", pi, f.idx, s.checkerPkg(pidx), f.values[pi], value)
+			s.errs++
 		}
 	}
 
@@ -822,7 +894,11 @@ func (s *genstate) emitChecker(f *funcdef, b *bytes.Buffer, pidx int) {
 			if p.IsControl() {
 				b.WriteString(fmt.Sprintf(" p%d-1", pi))
 			} else {
-				b.WriteString(fmt.Sprintf(" p%d", pi))
+				if !p.IsBlank() {
+					b.WriteString(fmt.Sprintf(" p%d", pi))
+				} else {
+					b.WriteString(fmt.Sprintf(" brc%d", pi))
+				}
 			}
 		}
 		b.WriteString(")\n")
@@ -895,18 +971,18 @@ func emitUtils(outf *os.File) {
 	fmt.Fprintf(outf, "import \"fmt\"\n")
 	fmt.Fprintf(outf, "import \"os\"\n\n")
 	fmt.Fprintf(outf, "var FailCount int\n\n")
-	fmt.Fprintf(outf, "func NoteFailure(fidx int, pref string, parmNo int) {\n")
+	fmt.Fprintf(outf, "func NoteFailure(fidx int, pkg string, pref string, parmNo int) {\n")
 	fmt.Fprintf(outf, "  FailCount += 1\n")
 	fmt.Fprintf(outf, "  fmt.Fprintf(os.Stderr, ")
-	fmt.Fprintf(outf, "\"Error: fail on =Test%%d= %%s %%d\\n\", fidx, pref, parmNo)\n")
+	fmt.Fprintf(outf, "\"Error: fail on =%%s.Test%%d= %%s %%d\\n\", pkg, fidx, pref, parmNo)\n")
 	fmt.Fprintf(outf, "  if (FailCount > 10) {\n")
 	fmt.Fprintf(outf, "    os.Exit(1)\n")
 	fmt.Fprintf(outf, "  }\n")
 	fmt.Fprintf(outf, "}\n\n")
-	fmt.Fprintf(outf, "func NoteFailureElem(fidx int, pref string, parmNo int, elem int) {\n")
+	fmt.Fprintf(outf, "func NoteFailureElem(fidx int, pkg string, pref string, parmNo int, elem int) {\n")
 	fmt.Fprintf(outf, "  FailCount += 1\n")
 	fmt.Fprintf(outf, "  fmt.Fprintf(os.Stderr, ")
-	fmt.Fprintf(outf, "\"Error: fail on =Test%%d= %%s %%d elem %%d\\n\", fidx, pref, parmNo, elem)\n")
+	fmt.Fprintf(outf, "\"Error: fail on =%%s.Test%%d= %%s %%d elem %%d\\n\", pkg, fidx, pref, parmNo, elem)\n")
 	fmt.Fprintf(outf, "  if (FailCount > 10) {\n")
 	fmt.Fprintf(outf, "    os.Exit(1)\n")
 	fmt.Fprintf(outf, "  }\n")
@@ -942,6 +1018,7 @@ type genstate struct {
 	ipref  string
 	tag    string
 	numtpk int
+	errs   int
 }
 
 func (s *genstate) callerPkg(which int) string {
@@ -966,7 +1043,7 @@ func (s *genstate) utilsPkg() string {
 	return s.tag + "Utils"
 }
 
-func Generate(tag string, outdir string, pkgpath string, numit int, numtpkgs int, seed int64, fcnmask map[int]int) {
+func Generate(tag string, outdir string, pkgpath string, numit int, numtpkgs int, seed int64, fcnmask map[int]int) int {
 	mainpkg := tag + "Main"
 
 	var ipref string
@@ -1033,4 +1110,5 @@ func Generate(tag string, outdir string, pkgpath string, numit int, numtpkgs int
 
 	verb(1, "closing files")
 	mainoutfile.Close()
+	return s.errs
 }
