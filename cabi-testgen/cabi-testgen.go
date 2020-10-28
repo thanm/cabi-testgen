@@ -18,7 +18,6 @@ import (
 var verbflag = flag.Int("v", 0, "Verbose trace output level")
 var numitflag = flag.Int("n", 1000, "Number of tests to generate")
 var seedflag = flag.Int64("s", 10101, "Random seed")
-var recurflag = flag.Bool("r", true, "Emit recursive calls")
 var tagflag = flag.String("t", "gen", "Prefix name of go files/pkgs to generate")
 var outdirflag = flag.String("o", "", "Output directory for generated files")
 var pkgpathflag = flag.String("p", "", "Base package path for generated files")
@@ -74,7 +73,6 @@ func main() {
 
 	verb(1, "starting generation")
 	tunables := generator.DefaultTunables()
-	tunables.EmitRecur = *recurflag
 	generator.SetTunables(tunables)
 	generator.Generate(*tagflag, *outdirflag, *pkgpathflag,
 		*numitflag, *numtpkflag, *seedflag, fcnmask)

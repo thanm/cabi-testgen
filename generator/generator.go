@@ -54,8 +54,8 @@ type TunableParams struct {
 	// are chosen from instead according to same proportions.
 	typeFractions [7]uint8
 
-	// Whether we try to emit recurive calls
-	EmitRecur bool
+	// Percentage of the time we'll emit recursive calls, from 0 to 100.
+	recurPerc uint8
 }
 
 var tunables = TunableParams{
@@ -66,10 +66,10 @@ var tunables = TunableParams{
 	intBitRanges:   [4]uint8{30, 20, 20, 30},
 	floatBitRanges: [2]uint8{50, 50},
 	unsignedRanges: [2]uint8{50, 50},
-	blankPerc:      0,
+	blankPerc:      20,
 	structDepth:    3,
 	typeFractions:  [7]uint8{30, 15, 20, 15, 5, 10, 5},
-	EmitRecur:      true,
+	recurPerc:      20,
 }
 
 func DefaultTunables() TunableParams {
@@ -96,6 +96,9 @@ func checkTunables(t TunableParams) {
 
 	if t.blankPerc > 100 {
 		log.Fatal(errors.New("blankPerc bad value, over 100"))
+	}
+	if t.recurPerc > 100 {
+		log.Fatal(errors.New("recurPerc bad value, over 100"))
 	}
 
 	s = 0
@@ -509,6 +512,7 @@ type funcdef struct {
 	arraydefs  []*arrayparm
 	params     []parm
 	returns    []parm
+	recur      bool
 }
 
 func intFlavor() string {
@@ -659,7 +663,8 @@ func (s *genstate) GenFunc(fidx int, pidx int) funcdef {
 	f.idx = fidx
 	numParams := rand.Intn(6)
 	numReturns := rand.Intn(5)
-	needControl := tunables.EmitRecur
+	f.recur = uint8(rand.Intn(100)) < tunables.recurPerc
+	needControl := f.recur
 	for pi := 0; pi < numParams; pi++ {
 		newparm := s.GenParm(&f, 0, needControl, pidx)
 		if newparm.IsControl() {

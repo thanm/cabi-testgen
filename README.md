@@ -83,34 +83,40 @@ Let's say that I'm testing a compile change that I think may break parameter pas
 
 
 ```
-$ cd ${GOPATH}/src/cabiTest
 
-# Fresh start
-$ rm -f $GOPATH/pkg/*/cabiTest/*.a
+# Download and build the generater
+$ git clone https://github.com/thanm/cabi-testgen
+...
+$ cd cabi-testgen/cabi-testgen
+$ go build .
 
-# Generate sources
-$ go get github.com/thanm/cabi-testgen/cabi-testgen
-$ cd $GOPATH
-$ cabi-testgen -n 500 -s 12345 -o $GOPATH/src/cabiTest -p cabiTest
-$ cd ${GOPATH}/src/cabiTest
-$ ls 
-genCaller  genChecker  genMain.go  genUtils
+# Run the generator, writing generated sources to /tmp/xxx. This 
+# will emit 1 package with 50 functions, using random seed 12345.
+$ ./cabi-testgen -q 1 -n 50 -s 12345 -o /tmp/xxx -p cabiTest
+$ ls /tmp/xxx
+genCaller0  genChecker0  genMain.go  genUtils  go.mod
+
 $
 
-# Build 'genChecker' with suspect compiler option.
-$ go build -gcflags=cabiTest/genChecker=-enable-suspect-feature" .
+# Build and run the generated sources. Here I'm 
+$ cd /tmp/xxx
+$ go run .
+starting main
+finished 500 tests
+$
 
-# Now build just the genChecker package with the suspect compiler
-
-...
+# Build 'genChecker0' package with suspect compiler option.
+$ go build -gcflags=cabiTest/genChecker0=-enable-suspect-feature" .
+$ 
 
 # Run
 $ ./genMain
 starting main
-finished 500 tests
+finished 50 tests
+$
 ```
 
-In the scenario above, each "CallerXXX" function would invoke "TestXXX", which would check all incoming param vals, and verify all returned vals as well.
+Within the generated code above, a CallerXXX function in package "genCaller0" will invoke "TestXXX" in package "genChecker0"; the code in TestXXX will verify that its parameters have the correct expected values, and then will return a set of known values; back in CallerXXX, the returns will be checked as well.
 
 
 
