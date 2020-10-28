@@ -29,11 +29,6 @@ func TestMoreComplicated(t *testing.T) {
 	saveit := tunables
 	defer func() { tunables = saveit }()
 
-	// Turn on complex, nested structs
-	tunables.structDepth = 3
-	tunables.typeFractions[0] -= 10
-	tunables.typeFractions[4] += 10
-
 	checkTunables(tunables)
 	s := &genstate{outdir: "/tmp", ipref: "foo/", tag: "gen", numtpk: 1}
 	for i := 0; i < 10000; i++ {
@@ -60,11 +55,14 @@ func TestIsBuildable(t *testing.T) {
 
 	verb(1, "generating into temp dir %s", td)
 
+	// Turn on blanks
+	tunables.blankPerc = 20
+
 	rand.Seed(1)
 	checkTunables(tunables)
 	pack := filepath.Base(td)
 	fcnmask := make(map[int]int)
-	Generate("x", td, pack, 10, 10, int64(0), fcnmask)
+	Generate("x", td, pack, 10, 1, int64(0), fcnmask)
 
 	verb(1, "building %s\n", td)
 

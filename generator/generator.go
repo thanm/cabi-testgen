@@ -41,6 +41,10 @@ type TunableParams struct {
 	// Similar to the above but for unsigned, signed ints.
 	unsignedRanges [2]uint8
 
+	// Percentage of struct fields that should be "_". Ranges
+	// from 0 to 100.
+	blankPerc uint8
+
 	// How deeply structs are allowed to be nested.
 	structDepth uint8
 
@@ -62,6 +66,7 @@ var tunables = TunableParams{
 	intBitRanges:   [4]uint8{30, 20, 20, 30},
 	floatBitRanges: [2]uint8{50, 50},
 	unsignedRanges: [2]uint8{50, 50},
+	blankPerc:      0,
 	structDepth:    3,
 	typeFractions:  [7]uint8{30, 15, 20, 15, 5, 10, 5},
 	EmitRecur:      true,
@@ -87,6 +92,10 @@ func checkTunables(t TunableParams) {
 	}
 	if s != 100 {
 		log.Fatal(errors.New("unsignedRanges tunable does not sum to 100"))
+	}
+
+	if t.blankPerc > 100 {
+		log.Fatal(errors.New("blankPerc bad value, over 100"))
 	}
 
 	s = 0
@@ -127,7 +136,7 @@ func verb(vlevel int, s string, a ...interface{}) {
 }
 
 type parm interface {
-	Declare(b *bytes.Buffer, prefix string, suffix string, parmNo int, caller bool)
+	Declare(b *bytes.Buffer, prefix string, suffix string, caller bool)
 	GenElemRef(elidx int, path string) (string, parm)
 	GenValue(value int, caller bool) (string, int)
 	IsControl() bool
@@ -180,12 +189,12 @@ func (p numparm) GenElemRef(elidx int, path string) (string, parm) {
 	return path, p
 }
 
-func (p numparm) Declare(b *bytes.Buffer, prefix string, suffix string, parmNo int, caller bool) {
+func (p numparm) Declare(b *bytes.Buffer, prefix string, suffix string, caller bool) {
 	t := fmt.Sprintf("%s%d%s", p.tag, p.widthInBits, suffix)
 	if p.tag == "byte" {
 		t = fmt.Sprintf("%s%s", p.tag, suffix)
 	}
-	b.WriteString(fmt.Sprintf("%s%d %s", prefix, parmNo, t))
+	b.WriteString(prefix + " " + t)
 }
 
 func (p numparm) genRandNum(value int) (string, int) {
@@ -262,6 +271,7 @@ type structparm struct {
 	sname  string
 	qname  string
 	fields []parm
+	blank  []bool
 }
 
 func (p structparm) TypeName() string {
@@ -272,12 +282,19 @@ func (p structparm) QualName() string {
 	return p.qname
 }
 
-func (p structparm) Declare(b *bytes.Buffer, prefix string, suffix string, parmNo int, caller bool) {
+func (p structparm) Declare(b *bytes.Buffer, prefix string, suffix string, caller bool) {
 	n := p.sname
 	if caller {
 		n = p.qname
 	}
-	b.WriteString(fmt.Sprintf("%s%d %s%s", prefix, parmNo, n, suffix))
+	b.WriteString(fmt.Sprintf("%s %s%s", prefix, n, suffix))
+}
+
+func (p structparm) FieldName(i int) string {
+	if p.blank[i] {
+		return "_"
+	}
+	return fmt.Sprintf("F%d", i)
 }
 
 func (p structparm) String() string {
@@ -285,7 +302,7 @@ func (p structparm) String() string {
 
 	buf.WriteString(fmt.Sprintf("struct %s {\n", p.sname))
 	for fi, f := range p.fields {
-		buf.WriteString(fmt.Sprintf("F%d %s\n", fi, f.String()))
+		buf.WriteString(fmt.Sprintf("%s %s\n", p.FieldName(fi), f.String()))
 	}
 	buf.WriteString("}")
 	return buf.String()
@@ -299,11 +316,17 @@ func (p structparm) GenValue(value int, caller bool) (string, int) {
 		n = p.qname
 	}
 	buf.WriteString(fmt.Sprintf("%s{", n))
+	nbfi := 0
 	for fi, f := range p.fields {
+		if p.blank[fi] {
+			continue
+		}
 		var valstr string
+		writeCom(&buf, nbfi)
+		buf.WriteString(p.FieldName(fi) + ": ")
 		valstr, value = f.GenValue(value, caller)
-		writeCom(&buf, fi)
 		buf.WriteString(valstr)
+		nbfi++
 	}
 	buf.WriteString("}")
 	return buf.String(), value
@@ -315,7 +338,10 @@ func (p structparm) IsControl() bool {
 
 func (p structparm) NumElements() int {
 	ne := 0
-	for _, f := range p.fields {
+	for fi, f := range p.fields {
+		if p.blank[fi] {
+			continue
+		}
 		ne += f.NumElements()
 	}
 	return ne
@@ -326,6 +352,9 @@ func (p structparm) GenElemRef(elidx int, path string) (string, parm) {
 	verb(4, "begin GenElemRef(%d,%s) on %s", elidx, path, p.String())
 	for fi, f := range p.fields {
 		fne := f.NumElements()
+		if p.blank[fi] {
+			continue
+		}
 
 		verb(4, "+ examining field %d fne %d ct %d", fi, fne, ct)
 
@@ -370,12 +399,12 @@ func (p arrayparm) QualName() string {
 	return p.qname
 }
 
-func (p arrayparm) Declare(b *bytes.Buffer, prefix string, suffix string, parmNo int, caller bool) {
+func (p arrayparm) Declare(b *bytes.Buffer, prefix string, suffix string, caller bool) {
 	n := p.aname
 	if caller {
 		n = p.qname
 	}
-	b.WriteString(fmt.Sprintf("%s%d %s%s", prefix, parmNo, n, suffix))
+	b.WriteString(fmt.Sprintf("%s %s%s", prefix, n, suffix))
 }
 
 func (p arrayparm) String() string {
@@ -434,12 +463,12 @@ type pointerparm struct {
 	totype parm
 }
 
-func (p pointerparm) Declare(b *bytes.Buffer, prefix string, suffix string, parmNo int, caller bool) {
+func (p pointerparm) Declare(b *bytes.Buffer, prefix string, suffix string, caller bool) {
 	n := p.totype.TypeName()
 	if caller {
 		n = p.totype.QualName()
 	}
-	b.WriteString(fmt.Sprintf("%s%d *%s%s", prefix, parmNo, n, suffix))
+	b.WriteString(fmt.Sprintf("%s *%s%s", prefix, n, suffix))
 }
 
 func (p pointerparm) GenElemRef(elidx int, path string) (string, parm) {
@@ -554,7 +583,10 @@ func (s *genstate) GenParm(f *funcdef, depth int, mkctl bool, pidx int) parm {
 			tnf := int(tunables.nStructFields) / int(depth+1)
 			nf := rand.Intn(tnf)
 			for fi := 0; fi < nf; fi++ {
-				sp.fields = append(sp.fields, s.GenParm(f, depth+1, false, pidx))
+				fp := s.GenParm(f, depth+1, false, pidx)
+				sp.fields = append(sp.fields, fp)
+				isblank := uint8(rand.Intn(100)) < tunables.blankPerc
+				sp.blank = append(sp.blank, isblank)
 			}
 			return sp
 		}
@@ -645,7 +677,7 @@ func emitStructAndArrayDefs(f *funcdef, b *bytes.Buffer) {
 	for _, s := range f.structdefs {
 		b.WriteString(fmt.Sprintf("type %s struct {\n", s.sname))
 		for fi, sp := range s.fields {
-			sp.Declare(b, "F", "\n", fi, false)
+			sp.Declare(b, s.FieldName(fi), "\n", false)
 		}
 		b.WriteString("}\n\n")
 	}
@@ -670,7 +702,7 @@ func (s *genstate) emitCaller(f *funcdef, b *bytes.Buffer, pidx int) {
 	// generate param constants
 	value = 1
 	for pi, p := range f.params {
-		p.Declare(b, "  var p", "\n", pi, true)
+		p.Declare(b, fmt.Sprintf("  var p%d", pi), "\n", true)
 		var valstr string
 		if p.IsControl() {
 			valstr = "10"
@@ -718,7 +750,7 @@ func (s *genstate) emitChecker(f *funcdef, b *bytes.Buffer, pidx int) {
 	// params
 	for pi, p := range f.params {
 		writeCom(b, pi)
-		p.Declare(b, "p", "", pi, false)
+		p.Declare(b, fmt.Sprintf("p%d", pi), "", false)
 	}
 	b.WriteString(") ")
 
@@ -728,7 +760,7 @@ func (s *genstate) emitChecker(f *funcdef, b *bytes.Buffer, pidx int) {
 	}
 	for ri, r := range f.returns {
 		writeCom(b, ri)
-		r.Declare(b, "r", "", ri, false)
+		r.Declare(b, fmt.Sprintf("r%d", ri), "", false)
 	}
 	if len(f.returns) > 0 {
 		b.WriteString(")")
