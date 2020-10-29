@@ -794,7 +794,7 @@ func (s *genstate) emitCaller(f *funcdef, b *bytes.Buffer, pidx int) {
 	// checking values returned
 	for ri, _ := range f.returns {
 		b.WriteString(fmt.Sprintf("  if r%d != c%d {\n", ri, ri))
-		b.WriteString(fmt.Sprintf("    %s.NoteFailure(%d, \"%s\", \"return\", %d)\n", s.utilsPkg(), f.idx, s.checkerPkg(pidx), ri))
+		b.WriteString(fmt.Sprintf("    %s.NoteFailure(%d, \"%s\", \"return\", %d, uint64(0))\n", s.utilsPkg(), f.idx, s.checkerPkg(pidx), ri))
 		b.WriteString("  }\n")
 	}
 
@@ -831,6 +831,10 @@ func (s *genstate) emitChecker(f *funcdef, b *bytes.Buffer, pidx int) {
 		b.WriteString(")")
 	}
 	b.WriteString(" {\n")
+
+	// local storage
+	b.WriteString(fmt.Sprintf("  var pad [256]uint64\n"))
+	b.WriteString(fmt.Sprintf("  pad[genUtils.FailCount]++\n"))
 
 	// generate return constants
 	value := 1
@@ -871,7 +875,7 @@ func (s *genstate) emitChecker(f *funcdef, b *bytes.Buffer, pidx int) {
 				} else {
 					b.WriteString(fmt.Sprintf("  p%df%dc := %s\n", pi, i, valstr))
 					b.WriteString(fmt.Sprintf("  if %s != p%df%dc {\n", elref, pi, i))
-					b.WriteString(fmt.Sprintf("    %s.NoteFailureElem(%d, \"%s\", \"parm\", %d, %d)\n", s.utilsPkg(), f.idx, s.checkerPkg(pidx), pi, i))
+					b.WriteString(fmt.Sprintf("    %s.NoteFailureElem(%d, \"%s\", \"parm\", %d, %d, pad[0])\n", s.utilsPkg(), f.idx, s.checkerPkg(pidx), pi, i))
 					b.WriteString("    return\n")
 					b.WriteString("  }\n")
 				}
@@ -972,7 +976,8 @@ func emitUtils(outf *os.File) {
 	fmt.Fprintf(outf, "import \"fmt\"\n")
 	fmt.Fprintf(outf, "import \"os\"\n\n")
 	fmt.Fprintf(outf, "var FailCount int\n\n")
-	fmt.Fprintf(outf, "func NoteFailure(fidx int, pkg string, pref string, parmNo int) {\n")
+	fmt.Fprintf(outf, "//go:noinline\n")
+	fmt.Fprintf(outf, "func NoteFailure(fidx int, pkg string, pref string, parmNo int, _ uint64) {\n")
 	fmt.Fprintf(outf, "  FailCount += 1\n")
 	fmt.Fprintf(outf, "  fmt.Fprintf(os.Stderr, ")
 	fmt.Fprintf(outf, "\"Error: fail on =%%s.Test%%d= %%s %%d\\n\", pkg, fidx, pref, parmNo)\n")
@@ -980,7 +985,8 @@ func emitUtils(outf *os.File) {
 	fmt.Fprintf(outf, "    os.Exit(1)\n")
 	fmt.Fprintf(outf, "  }\n")
 	fmt.Fprintf(outf, "}\n\n")
-	fmt.Fprintf(outf, "func NoteFailureElem(fidx int, pkg string, pref string, parmNo int, elem int) {\n")
+	fmt.Fprintf(outf, "//go:noinline\n")
+	fmt.Fprintf(outf, "func NoteFailureElem(fidx int, pkg string, pref string, parmNo int, elem int, _ uint64) {\n")
 	fmt.Fprintf(outf, "  FailCount += 1\n")
 	fmt.Fprintf(outf, "  fmt.Fprintf(os.Stderr, ")
 	fmt.Fprintf(outf, "\"Error: fail on =%%s.Test%%d= %%s %%d elem %%d\\n\", pkg, fidx, pref, parmNo, elem)\n")
