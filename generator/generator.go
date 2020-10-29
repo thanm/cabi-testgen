@@ -60,8 +60,8 @@ type TunableParams struct {
 }
 
 var tunables = TunableParams{
-	nParmRange:     20,
-	nReturnRange:   10,
+	nParmRange:     15,
+	nReturnRange:   7,
 	nStructFields:  7,
 	nArrayElements: 5,
 	intBitRanges:   [4]uint8{30, 20, 20, 30},
@@ -713,8 +713,8 @@ func (s *genstate) GenReturn(f *funcdef, depth int, pidx int) parm {
 func (s *genstate) GenFunc(fidx int, pidx int) funcdef {
 	var f funcdef
 	f.idx = fidx
-	numParams := rand.Intn(6)
-	numReturns := rand.Intn(5)
+	numParams := rand.Intn(int(tunables.nParmRange))
+	numReturns := rand.Intn(int(tunables.nReturnRange))
 	f.recur = uint8(rand.Intn(100)) < tunables.recurPerc
 	needControl := f.recur
 	for pi := 0; pi < numParams; pi++ {
@@ -914,7 +914,7 @@ func (s *genstate) emitChecker(f *funcdef, b *bytes.Buffer, pidx int) {
 
 func emitReturnConst(f *funcdef, b *bytes.Buffer) {
 	// returning code
-	b.WriteString("    return ")
+	b.WriteString("  return ")
 	if len(f.returns) > 0 {
 		for ri, _ := range f.returns {
 			writeCom(b, ri)
