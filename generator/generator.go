@@ -50,10 +50,10 @@ type TunableParams struct {
 	structDepth uint8
 
 	// Fraction of param and return types assigned to each
-	// category: struct/array/int/float/complex/byte/pointer at the top
+	// category: struct/array/int/float/complex/byte/pointer/string at the top
 	// level. If nesting precludes using a struct, other types
 	// are chosen from instead according to same proportions.
-	typeFractions [7]uint8
+	typeFractions [8]uint8
 
 	// Percentage of the time we'll emit recursive calls, from 0 to 100.
 	recurPerc uint8
@@ -69,7 +69,7 @@ var tunables = TunableParams{
 	unsignedRanges: [2]uint8{50, 50},
 	blankPerc:      20,
 	structDepth:    3,
-	typeFractions:  [7]uint8{30, 15, 20, 15, 5, 10, 5},
+	typeFractions:  [8]uint8{25, 15, 20, 15, 5, 10, 5, 5},
 	recurPerc:      20,
 }
 
@@ -549,6 +549,56 @@ func (p pointerparm) QualName() string {
 	return fmt.Sprintf("*%s", p.totype.QualName())
 }
 
+type stringparm struct {
+	tag   string
+	blank bool
+}
+
+func (p stringparm) Declare(b *bytes.Buffer, prefix string, suffix string, caller bool) {
+	b.WriteString(prefix + " string" + suffix)
+}
+
+func (p stringparm) GenElemRef(elidx int, path string) (string, parm) {
+	return path, p
+}
+
+var letters = []rune("�꿦3򂨃f6ꂅ8ˋ<􂊇񊶿(z̽|ϣᇊ񁗇򟄼q񧲥筁{ЂƜĽ")
+
+func (p stringparm) GenValue(value int, caller bool) (string, int) {
+	ns := len(letters) - 9
+	nel := rand.Intn(8)
+	st := rand.Intn(ns)
+	en := st + nel
+	if en > ns {
+		en = ns
+	}
+	return "\"" + string(letters[st:en]) + "\"", value + 1
+}
+
+func (p stringparm) IsControl() bool {
+	return false
+}
+
+func (p stringparm) IsBlank() bool {
+	return p.blank
+}
+
+func (p stringparm) NumElements() int {
+	return 1
+}
+
+func (p stringparm) String() string {
+	return "string"
+}
+
+func (p stringparm) TypeName() string {
+	return "string"
+}
+
+func (p stringparm) QualName() string {
+	return "string"
+}
+
 type funcdef struct {
 	idx        int
 	structdefs []*structparm
@@ -697,6 +747,13 @@ func (s *genstate) GenParm(f *funcdef, depth int, mkctl bool, pidx int) parm {
 			pp.blank = isblank
 			return pp
 		}
+	case which < tf[7]:
+		{
+			var sp stringparm
+			sp.tag = "string"
+			sp.blank = isblank
+			return sp
+		}
 	}
 
 	// fallback
@@ -834,7 +891,7 @@ func (s *genstate) emitChecker(f *funcdef, b *bytes.Buffer, pidx int) {
 
 	// local storage
 	b.WriteString(fmt.Sprintf("  var pad [256]uint64\n"))
-	b.WriteString(fmt.Sprintf("  pad[genUtils.FailCount]++\n"))
+	b.WriteString(fmt.Sprintf("  pad[%s.FailCount]++\n", s.utilsPkg()))
 
 	// generate return constants
 	value := 1
