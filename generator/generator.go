@@ -805,6 +805,7 @@ func (s *genstate) emitChecker(f *funcdef, b *bytes.Buffer, pidx int) {
 	verb(4, "emitting struct and array defs")
 	emitStructAndArrayDefs(f, b)
 	b.WriteString(fmt.Sprintf("// %d returns %d params\n", len(f.returns), len(f.params)))
+	b.WriteString("//go:noinline\n")
 	b.WriteString(fmt.Sprintf("func Test%d(", f.idx))
 
 	// params
