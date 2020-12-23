@@ -57,6 +57,9 @@ type TunableParams struct {
 
 	// Percentage of the time we'll emit recursive calls, from 0 to 100.
 	recurPerc uint8
+
+	// If true, test reflect.Call path as well.
+	doReflectCall bool
 }
 
 var tunables = TunableParams{
@@ -71,6 +74,7 @@ var tunables = TunableParams{
 	structDepth:    3,
 	typeFractions:  [8]uint8{25, 15, 20, 15, 5, 10, 5, 5},
 	recurPerc:      20,
+	doReflectCall:  true,
 }
 
 func DefaultTunables() TunableParams {
@@ -855,6 +859,34 @@ func (s *genstate) emitCaller(f *funcdef, b *bytes.Buffer, pidx int) {
 		b.WriteString("  }\n")
 	}
 
+	if tunables.doReflectCall {
+		// now make the same call via reflection
+		b.WriteString("  // same call via reflection\n")
+		b.WriteString(fmt.Sprintf("  rc := reflect.ValueOf(%s.Test%d)\n",
+			s.checkerPkg(pidx), f.idx))
+		b.WriteString("  ")
+		if len(f.returns) > 0 {
+			b.WriteString("rvslice := ")
+		}
+		b.WriteString("  rc.Call([]reflect.Value{")
+		for pi, _ := range f.params {
+			writeCom(b, pi)
+			b.WriteString(fmt.Sprintf("reflect.ValueOf(p%d)", pi))
+		}
+		b.WriteString("})\n")
+
+		// check values returned
+		for ri, r := range f.returns {
+			b.WriteString(fmt.Sprintf("  rr%di := rvslice[%d].Interface()\n", ri, ri))
+			b.WriteString(fmt.Sprintf("  rr%dv:= rr%di.(", ri, ri))
+			r.Declare(b, "", "", true)
+			b.WriteString(")\n")
+			b.WriteString(fmt.Sprintf("  if rr%dv != c%d {\n", ri, ri))
+			b.WriteString(fmt.Sprintf("    %s.NoteFailure(%d, \"%s\", \"reflect return\", %d, uint64(0))\n", s.utilsPkg(), f.idx, s.checkerPkg(pidx), ri))
+			b.WriteString("  }\n")
+		}
+	}
+
 	b.WriteString("}\n\n")
 }
 
@@ -1023,6 +1055,10 @@ func openOutputFile(filename string, pk string, imports []string, ipref string) 
 	}
 	outf.WriteString(fmt.Sprintf("package %s\n\n", pk))
 	for _, imp := range imports {
+		if imp == "reflect" {
+			outf.WriteString("import \"reflect\"\n")
+			continue
+		}
 		outf.WriteString(fmt.Sprintf("import \"%s%s\"\n", ipref, imp))
 	}
 	outf.WriteString("\n")
@@ -1141,8 +1177,12 @@ func Generate(tag string, outdir string, pkgpath string, numit int, numtpkgs int
 	mainoutfile := openOutputFile(mainfile, "main", mainimports, ipref)
 
 	for k := 0; k < numtpkgs; k++ {
+		callerImports := []string{s.checkerPkg(k), s.utilsPkg()}
+		if tunables.doReflectCall {
+			callerImports = append(callerImports, "reflect")
+		}
 		calleroutfile := openOutputFile(s.callerFile(k), s.callerPkg(k),
-			[]string{s.checkerPkg(k), s.utilsPkg()}, ipref)
+			callerImports, ipref)
 		checkeroutfile := openOutputFile(s.checkerFile(k), s.checkerPkg(k),
 			[]string{s.utilsPkg()}, ipref)
 
