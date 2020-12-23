@@ -98,7 +98,7 @@ genCaller0  genChecker0  genMain.go  genUtils  go.mod
 
 $
 
-# Build and run the generated sources. Here I'm 
+# Build and run the generated sources.
 $ cd /tmp/xxx
 $ go run .
 starting main
@@ -119,4 +119,10 @@ $
 Within the generated code above, a CallerXXX function in package "genCaller0" will invoke "TestXXX" in package "genChecker0"; the code in TestXXX will verify that its parameters have the correct expected values, and then will return a set of known values; back in CallerXXX, the returns will be checked as well.
 
 
+## Limitations, future work
+
+No support yet for method calls or to variadic functions. 
+
+The set of generated types is still a bit thin; it doesn't yet include
+interfaces, maps or slices.
 
