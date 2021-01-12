@@ -49,9 +49,9 @@ type TunableParams struct {
 	// How deeply structs are allowed to be nested.
 	structDepth uint8
 
-	// Fraction of param and return types assigned to each
-	// category: struct/array/int/float/complex/byte/pointer/string at the top
-	// level. If nesting precludes using a struct, other types
+	// Fraction of param and return types assigned to each of:
+	// struct/array/int/float/complex/byte/pointer/string at the
+	// top level. If nesting precludes using a struct, other types
 	// are chosen from instead according to same proportions.
 	typeFractions [8]uint8
 
@@ -126,6 +126,36 @@ func checkTunables(t TunableParams) {
 func SetTunables(t TunableParams) {
 	checkTunables(t)
 	tunables = t
+}
+
+func (t *TunableParams) DisableReflectionCalls() {
+	t.doReflectCall = false
+}
+
+func (t *TunableParams) DisableRecursiveCalls() {
+	t.recurPerc = 0
+}
+
+func (t *TunableParams) LimitInputs(n int) error {
+	if n > 100 {
+		return fmt.Errorf("value %d passed to LimitInputs is too large *(max 100)", n)
+	}
+	if n < 0 {
+		return fmt.Errorf("value %d passed to LimitInputs is invalid", n)
+	}
+	t.nParmRange = uint8(n)
+	return nil
+}
+
+func (t *TunableParams) LimitOutputs(n int) error {
+	if n > 100 {
+		return fmt.Errorf("value %d passed to LimitOutputs is too large *(max 100)", n)
+	}
+	if n < 0 {
+		return fmt.Errorf("value %d passed to LimitOutputs is invalid", n)
+	}
+	t.nReturnRange = uint8(n)
+	return nil
 }
 
 func writeCom(b *bytes.Buffer, i int) {
@@ -774,8 +804,8 @@ func (s *genstate) GenReturn(f *funcdef, depth int, pidx int) parm {
 func (s *genstate) GenFunc(fidx int, pidx int) funcdef {
 	var f funcdef
 	f.idx = fidx
-	numParams := rand.Intn(int(tunables.nParmRange))
-	numReturns := rand.Intn(int(tunables.nReturnRange))
+	numParams := rand.Intn(1 + int(tunables.nParmRange))
+	numReturns := rand.Intn(1 + int(tunables.nReturnRange))
 	f.recur = uint8(rand.Intn(100)) < tunables.recurPerc
 	needControl := f.recur
 	for pi := 0; pi < numParams; pi++ {
@@ -894,6 +924,9 @@ func (s *genstate) emitChecker(f *funcdef, b *bytes.Buffer, pidx int) {
 	verb(4, "emitting struct and array defs")
 	emitStructAndArrayDefs(f, b)
 	b.WriteString(fmt.Sprintf("// %d returns %d params\n", len(f.returns), len(f.params)))
+	if s.pragma != "" {
+		b.WriteString("//go:" + s.pragma + "\n")
+	}
 	b.WriteString("//go:noinline\n")
 	b.WriteString(fmt.Sprintf("func Test%d(", f.idx))
 
@@ -1119,6 +1152,7 @@ type genstate struct {
 	tag    string
 	numtpk int
 	errs   int
+	pragma string
 }
 
 func (s *genstate) callerPkg(which int) string {
@@ -1143,7 +1177,7 @@ func (s *genstate) utilsPkg() string {
 	return s.tag + "Utils"
 }
 
-func Generate(tag string, outdir string, pkgpath string, numit int, numtpkgs int, seed int64, fcnmask map[int]int) int {
+func Generate(tag string, outdir string, pkgpath string, numit int, numtpkgs int, seed int64, pragma string, fcnmask map[int]int) int {
 	mainpkg := tag + "Main"
 
 	var ipref string
@@ -1151,7 +1185,7 @@ func Generate(tag string, outdir string, pkgpath string, numit int, numtpkgs int
 		ipref = pkgpath + "/"
 	}
 
-	s := genstate{outdir: outdir, ipref: ipref, tag: tag, numtpk: numtpkgs}
+	s := genstate{outdir: outdir, ipref: ipref, tag: tag, numtpk: numtpkgs, pragma: pragma}
 
 	if outdir != "." {
 		makeDir(outdir)

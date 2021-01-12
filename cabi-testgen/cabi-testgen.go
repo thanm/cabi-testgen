@@ -20,9 +20,15 @@ var numitflag = flag.Int("n", 1000, "Number of tests to generate")
 var seedflag = flag.Int64("s", 10101, "Random seed")
 var tagflag = flag.String("t", "gen", "Prefix name of go files/pkgs to generate")
 var outdirflag = flag.String("o", "", "Output directory for generated files")
-var pkgpathflag = flag.String("p", "", "Base package path for generated files")
+var pkgpathflag = flag.String("p", "gen", "Base package path for generated files")
 var numtpkflag = flag.Int("q", 1, "Number of test packages")
 var maskflag = flag.String("M", "", "Mask containing list of fcn numbers to emit")
+
+var reflectflag = flag.Bool("reflect", true, "Include testing of reflect.Call.")
+var recurflag = flag.Bool("recur", true, "Include testing of recursive calls.")
+var inlimitflag = flag.Int("inmax", -1, "Max number of input params.")
+var outlimitflag = flag.Int("outmax", -1, "Max number of input params.")
+var pragmaflag = flag.String("pragma", "", "Tag generated test routines with pragma //go:<value>.")
 
 func verb(vlevel int, s string, a ...interface{}) {
 	if *verbflag >= vlevel {
@@ -43,6 +49,23 @@ func usage(msg string) {
 	fmt.Fprintf(os.Stderr, "  \tin 'gendir', using random see 10101\n")
 
 	os.Exit(2)
+}
+
+func setupTunables() {
+	tunables := generator.DefaultTunables()
+	if !*reflectflag {
+		tunables.DisableReflectionCalls()
+	}
+	if !*recurflag {
+		tunables.DisableRecursiveCalls()
+	}
+	if *inlimitflag != -1 {
+		tunables.LimitInputs(*inlimitflag)
+	}
+	if *outlimitflag != -1 {
+		tunables.LimitOutputs(*outlimitflag)
+	}
+	generator.SetTunables(tunables)
 }
 
 func main() {
@@ -72,12 +95,12 @@ func main() {
 	}
 
 	verb(1, "starting generation")
-	tunables := generator.DefaultTunables()
-	generator.SetTunables(tunables)
+	setupTunables()
 	errs := generator.Generate(*tagflag, *outdirflag, *pkgpathflag,
-		*numitflag, *numtpkflag, *seedflag, fcnmask)
+		*numitflag, *numtpkflag, *seedflag, *pragmaflag, fcnmask)
 	if errs != 0 {
 		log.Fatal("errors during generation")
 	}
+	verb(0, "... files written to directory %s", *outdirflag)
 	verb(1, "leaving main")
 }

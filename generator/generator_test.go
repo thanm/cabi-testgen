@@ -65,7 +65,7 @@ func TestIsBuildable(t *testing.T) {
 	checkTunables(tunables)
 	pack := filepath.Base(td)
 	fcnmask := make(map[int]int)
-	errs := Generate("x", td, pack, 10, 10, int64(0), fcnmask)
+	errs := Generate("x", td, pack, 10, 10, int64(0), "", fcnmask)
 	if errs != 0 {
 		t.Errorf("%d errors during Generate", errs)
 	}

@@ -3,10 +3,11 @@
 Rudimentary test harness for C-ABI testing. Randomly generates functions with
 interesting signatures (mix of arrays, scalars, structs) plus code to call it
 with specific values. The resulting program (when run) includes code to call
-each test function and verify that values are being passed/received
-properly. 
+each test function and verify that values are being passed/received properly.
 
-This can be used "as is" or one half of the test (caller or callee) with a "good" compiler and the other half with a "suspect" compiler, then test to see if the suspect compiler is doing things correctly.
+This can be used "as is" or by building one half of the test (caller or callee)
+with a "good" compiler and the other half with a "suspect" compiler, then test
+to see if the suspect compiler is doing things correctly.
 
 ## What the generated code looks like
 
@@ -75,6 +76,7 @@ $ cd ${GOPATH}/src/cabiTest
 $ go run genMain.go
 starting main
 finished 500 tests
+$ go build .
 $
 
 ```
@@ -95,7 +97,6 @@ $ go build .
 $ ./cabi-testgen -q 1 -n 50 -s 12345 -o /tmp/xxx -p cabiTest
 $ ls /tmp/xxx
 genCaller0  genChecker0  genMain.go  genUtils  go.mod
-
 $
 
 # Build and run the generated sources.

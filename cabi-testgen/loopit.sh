@@ -16,7 +16,7 @@ while [ $ITER !=  0 ]; do
   echo "Iter $ITER"
   D=/tmp/cabiTest
   rm -rf $D
-  CMD="./cabi-testgen -q 20 -n 50 -s $SEED -o $D -p cabiTest"
+  CMD="./cabi-testgen -q 20 -n 20 -s $SEED -o $D -p cabiTest"
   echo $CMD
   $CMD
   if [ $? != 0 ]; then
