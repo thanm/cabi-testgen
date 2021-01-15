@@ -122,7 +122,9 @@ Within the generated code above, a CallerXXX function in package "genCaller0" wi
 
 ## Limitations, future work
 
-No support yet for method calls or to variadic functions. 
+Method calls are supported, but only value receivers (not pointer receivers).
+
+No support yet for variadic functions.
 
 The set of generated types is still a bit thin; it doesn't yet include
 interfaces, maps or slices.

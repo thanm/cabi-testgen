@@ -15,8 +15,7 @@ func TestBasic(t *testing.T) {
 	checkTunables(tunables)
 	s := &genstate{outdir: "/tmp", ipref: "foo/", tag: "gen", numtpk: 1}
 	for i := 0; i < 1000; i++ {
-		f := s.GenFunc(i, i)
-		var fp *funcdef = &f
+		fp := s.GenFunc(i, i)
 		var buf bytes.Buffer
 		var b *bytes.Buffer = &buf
 		s.emitCaller(fp, b, i)
@@ -35,8 +34,7 @@ func TestMoreComplicated(t *testing.T) {
 	checkTunables(tunables)
 	s := &genstate{outdir: "/tmp", ipref: "foo/", tag: "gen", numtpk: 1}
 	for i := 0; i < 10000; i++ {
-		f := s.GenFunc(i, i)
-		var fp *funcdef = &f
+		fp := s.GenFunc(i, i)
 		var buf bytes.Buffer
 		var b *bytes.Buffer = &buf
 		s.emitCaller(fp, b, i)
@@ -51,13 +49,14 @@ func TestMoreComplicated(t *testing.T) {
 
 func TestIsBuildable(t *testing.T) {
 
-	//Verbctl = 2
+	//Verbctl = 4
 
 	td, err := ioutil.TempDir("", "cabi-testgen")
 	if err != nil {
 		t.Errorf("can't create temp dir")
 	}
 	defer os.RemoveAll(td)
+	//println("=-= td is ", td)
 
 	verb(1, "generating into temp dir %s", td)
 

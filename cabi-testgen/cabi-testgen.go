@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math/rand"
 	"os"
 	"strconv"
 	"strings"
@@ -26,6 +27,7 @@ var maskflag = flag.String("M", "", "Mask containing list of fcn numbers to emit
 
 var reflectflag = flag.Bool("reflect", true, "Include testing of reflect.Call.")
 var recurflag = flag.Bool("recur", true, "Include testing of recursive calls.")
+var methodflag = flag.Bool("method", true, "Include testing of method calls.")
 var inlimitflag = flag.Int("inmax", -1, "Max number of input params.")
 var outlimitflag = flag.Int("outmax", -1, "Max number of input params.")
 var pragmaflag = flag.String("pragma", "", "Tag generated test routines with pragma //go:<value>.")
@@ -59,6 +61,9 @@ func setupTunables() {
 	if !*recurflag {
 		tunables.DisableRecursiveCalls()
 	}
+	if !*methodflag {
+		tunables.DisableMethodCalls()
+	}
 	if *inlimitflag != -1 {
 		tunables.LimitInputs(*inlimitflag)
 	}
@@ -78,6 +83,7 @@ func main() {
 	}
 	verb(1, "in main verblevel=%d", *verbflag)
 	verb(1, "seed is %d", *seedflag)
+	rand.Seed(*seedflag)
 	if flag.NArg() != 0 {
 		usage("unknown extra arguments")
 	}
