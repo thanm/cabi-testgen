@@ -119,6 +119,34 @@ $
 
 Within the generated code above, a CallerXXX function in package "genCaller0" will invoke "TestXXX" in package "genChecker0"; the code in TestXXX will verify that its parameters have the correct expected values, and then will return a set of known values; back in CallerXXX, the returns will be checked as well.
 
+## Command line options
+
+The program has command line options to control the nature of the code generated, as well as size. Some basic options:
+
+* the "-n" option tells the generator the number of test functions to emit per generated package. Best to keep this number down to something reasonable (1000 or less) so as to keep build times reasonable.
+
+* the "-q" option controls the number of emitted test packages.
+
+* the "-o" option provides that path of a directory into which the generator will emit code
+
+* the "-p" option provides a packagepath prefix to use for the emitted code.
+
+* the "-s" option provides the generator with a seed for its random number generator.
+
+There are also options to tell the generator avoid using specific constructs:
+
+* "-recur=0" tells the generator to avoid emitting recursive calls
+
+* "-inmax=N" tells the generator to emit at most N input params (by default number of input paramters is randomly chosen between 0 and 15)
+
+* "-outmax=N" tells the generator to emit at most N output params (by default number of output parameters is randomly chosen between 0 and 15)
+
+* "-reflect=0" tells the generator to avoid testing the reflect.Call path for test routines
+
+* "-method=0" tells the generator to avoid emitting or testing methods
+
+* "-pragma=XYZ" tells the generator to tag test routines with the pragma "//go:XYZ"
+
 
 ## Limitations, future work
 
