@@ -84,7 +84,7 @@ var tunables = TunableParams{
 	recurPerc:             20,
 	methodPerc:            10,
 	pointerMethodCallPerc: 50,
-	doReflectCall:         true,
+	doReflectCall:         false,
 }
 
 func DefaultTunables() TunableParams {

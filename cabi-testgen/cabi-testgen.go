@@ -25,7 +25,7 @@ var pkgpathflag = flag.String("p", "gen", "Base package path for generated files
 var numtpkflag = flag.Int("q", 1, "Number of test packages")
 var maskflag = flag.String("M", "", "Mask containing list of fcn numbers to emit")
 
-var reflectflag = flag.Bool("reflect", true, "Include testing of reflect.Call.")
+var reflectflag = flag.Bool("reflect", false, "Include testing of reflect.Call.")
 var recurflag = flag.Bool("recur", true, "Include testing of recursive calls.")
 var methodflag = flag.Bool("method", true, "Include testing of method calls.")
 var inlimitflag = flag.Int("inmax", -1, "Max number of input params.")
