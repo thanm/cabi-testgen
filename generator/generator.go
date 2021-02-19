@@ -59,6 +59,19 @@ type TunableParams struct {
 
 	// If true, test reflect.Call path as well.
 	doReflectCall bool
+
+	// If true, then randomly take addresses of params/returns.
+	takeAddress bool
+
+	// For a given address-taken param or return, controls the
+	// manner in which the indirect read or write takes
+	// place. This is a set of percentages for
+	// not/simple/passed/heap, where "not" means not address
+	// taken, "simple" means a simple read or write, "passed"
+	// means that the address is passed to a well-behaved
+	// function, and "heap" means that the address is assigned to
+	// a global.
+	addrFractions [4]uint8
 }
 
 var tunables = TunableParams{
@@ -85,6 +98,9 @@ var tunables = TunableParams{
 	methodPerc:            10,
 	pointerMethodCallPerc: 50,
 	doReflectCall:         false,
+	takeAddress:           true,
+	//addrFractions:         [4]uint8{40, 25, 25, 10},
+	addrFractions: [4]uint8{50, 50, 0, 0},
 }
 
 func DefaultTunables() TunableParams {
@@ -137,6 +153,14 @@ func checkTunables(t TunableParams) {
 	if s != 100 {
 		log.Fatal(errors.New("typeFractions tunable does not sum to 100"))
 	}
+
+	s = 0
+	for _, v := range t.addrFractions {
+		s += int(v)
+	}
+	if s != 100 {
+		log.Fatal(errors.New("addrFractions tunable does not sum to 100"))
+	}
 }
 
 func SetTunables(t TunableParams) {
@@ -154,6 +178,10 @@ func (t *TunableParams) DisableRecursiveCalls() {
 
 func (t *TunableParams) DisableMethodCalls() {
 	t.methodPerc = 0
+}
+
+func (t *TunableParams) DisableTakeAddr() {
+	t.takeAddress = false
 }
 
 func (t *TunableParams) LimitInputs(n int) error {
@@ -236,6 +264,20 @@ func (s *genstate) floatBits() uint32 {
 	return uint32(64)
 }
 
+func (s *genstate) genAddrTaken() addrTakenHow {
+	which := uint8(rand.Intn(100))
+	res := notAddrTaken
+	var t uint8 = 0
+	for _, v := range s.tunables.addrFractions {
+		t += v
+		if which < t {
+			return res
+		}
+		res++
+	}
+	return notAddrTaken
+}
+
 func (s *genstate) pushTunables() {
 	s.tstack = append(s.tstack, s.tunables)
 }
@@ -281,9 +323,15 @@ func (s *genstate) GenParm(f *funcdef, depth int, mkctl bool, pidx int) parm {
 
 	isblank := uint8(rand.Intn(100)) < s.tunables.blankPerc
 
+	addrTaken := notAddrTaken
+	if depth == 0 && tunables.takeAddress && !isblank {
+		addrTaken = s.genAddrTaken()
+	}
+
 	// Make adjusted selection (pick a bucket within tf)
 	which := uint8(rand.Intn(amt)) + off
 	verb(3, "which=%d", which)
+	var retval parm
 	switch {
 	case which < tf[0]:
 		{
@@ -303,9 +351,8 @@ func (s *genstate) GenParm(f *funcdef, depth int, mkctl bool, pidx int) parm {
 				fp := s.GenParm(f, depth+1, false, pidx)
 				sp.fields = append(sp.fields, fp)
 			}
-			sp.blank = isblank
 			f.structdefs[ns] = sp
-			return sp
+			retval = &sp
 		}
 	case which < tf[1]:
 		{
@@ -318,9 +365,9 @@ func (s *genstate) GenParm(f *funcdef, depth int, mkctl bool, pidx int) parm {
 			f.arraydefs = append(f.arraydefs, ap)
 			ap.nelements = nel
 			ap.eltype = s.GenParm(f, depth+1, false, pidx)
-			ap.blank = isblank
+			ap.eltype.SetBlank(false)
 			f.arraydefs[ns] = ap
-			return ap
+			retval = &ap
 		}
 	case which < tf[2]:
 		{
@@ -329,57 +376,57 @@ func (s *genstate) GenParm(f *funcdef, depth int, mkctl bool, pidx int) parm {
 			ip.widthInBits = s.intBits()
 			if mkctl {
 				ip.ctl = true
-			} else {
-				ip.blank = isblank
 			}
-			return ip
+			retval = &ip
 		}
 	case which < tf[3]:
 		{
 			var fp numparm
 			fp.tag = "float"
 			fp.widthInBits = s.floatBits()
-			fp.blank = isblank
-			return fp
+			retval = &fp
 		}
 	case which < tf[4]:
 		{
 			var fp numparm
 			fp.tag = "complex"
 			fp.widthInBits = s.floatBits() * 2
-			fp.blank = isblank
-			return fp
+			retval = &fp
 		}
 	case which < tf[5]:
 		{
 			var bp numparm
 			bp.tag = "byte"
 			bp.widthInBits = 8
-			bp.blank = isblank
-			return bp
+			retval = &bp
 		}
 	case which < tf[6]:
 		{
 			var pp pointerparm
 			pp.tag = "pointer"
 			pp.totype = s.GenParm(f, depth, false, pidx)
-			pp.blank = isblank
-			return pp
+			retval = &pp
 		}
 	case which < tf[7]:
 		{
 			var sp stringparm
 			sp.tag = "string"
-			sp.blank = isblank
-			return sp
+			retval = &sp
+		}
+	default:
+		{
+			// fallback
+			var ip numparm
+			ip.tag = "uint"
+			ip.widthInBits = 8
+			retval = &ip
 		}
 	}
-
-	// fallback
-	var ip numparm
-	ip.tag = "uint"
-	ip.widthInBits = 8
-	return ip
+	if !mkctl {
+		retval.SetBlank(isblank)
+	}
+	retval.SetAddrTaken(addrTaken)
+	return retval
 }
 
 func (s *genstate) GenReturn(f *funcdef, depth int, pidx int) parm {
@@ -542,6 +589,28 @@ func (s *genstate) emitCaller(f *funcdef, b *bytes.Buffer, pidx int) {
 	b.WriteString("}\n\n")
 }
 
+func checkableElements(p parm) int {
+	if p.IsBlank() {
+		return 0
+	}
+	sp, isstruct := p.(*structparm)
+	if isstruct {
+		s := 0
+		for fi := range sp.fields {
+			s += checkableElements(sp.fields[fi])
+		}
+		return s
+	}
+	ap, isarray := p.(*arrayparm)
+	if isarray {
+		if ap.nelements == 0 {
+			return 0
+		}
+		return int(ap.nelements) * checkableElements(ap.eltype)
+	}
+	return 1
+}
+
 func (s *genstate) emitChecker(f *funcdef, b *bytes.Buffer, pidx int) {
 	verb(4, "emitting struct and array defs")
 	emitStructAndArrayDefs(f, b)
@@ -564,6 +633,8 @@ func (s *genstate) emitChecker(f *funcdef, b *bytes.Buffer, pidx int) {
 	}
 
 	b.WriteString(fmt.Sprintf(" Test%d(", f.idx))
+
+	verb(4, "emitting checker p%d/Test%d", pidx, f.idx)
 
 	// params
 	for pi, p := range f.params {
@@ -602,13 +673,39 @@ func (s *genstate) emitChecker(f *funcdef, b *bytes.Buffer, pidx int) {
 		b.WriteString(fmt.Sprintf("  rc%d := %s\n", ri, valstr))
 	}
 
+	// Helper function to generate param read reference.
+	genParamRef := func(p parm, idx int) string {
+		switch p.AddrTaken() {
+		case notAddrTaken:
+			return fmt.Sprintf("p%d", idx)
+		case addrTakenSimple:
+			return fmt.Sprintf("(*ap%d)", idx)
+		default:
+			panic("bad")
+		}
+	}
+	for pi, p := range f.params {
+		if checkableElements(p) == 0 {
+			continue
+		}
+		switch p.AddrTaken() {
+		case notAddrTaken:
+			// all set
+		case addrTakenSimple:
+			b.WriteString(fmt.Sprintf("  ap%d := &p%d\n", pi, pi))
+		default:
+			panic("bad")
+		}
+	}
+
 	// parameter checking code
 	haveControl := false
 	for pi, p := range f.params {
 		verb(4, "emitting parm checking code for p%d numel=%d pt=%s value=%d", pi, p.NumElements(), p.TypeName(), value)
 
 		if p.IsControl() {
-			b.WriteString(fmt.Sprintf("  if p%d == 0 {\n", pi))
+			b.WriteString(fmt.Sprintf("  if %s == 0 {\n",
+				genParamRef(p, pi)))
 			emitReturnConst(f, b)
 			b.WriteString("  }\n")
 			haveControl = true
@@ -622,12 +719,13 @@ func (s *genstate) emitChecker(f *funcdef, b *bytes.Buffer, pidx int) {
 			}
 		} else {
 			numel := p.NumElements()
+			cel := checkableElements(p)
 			for i := 0; i < numel; i++ {
 				var valstr string
 				verb(4, "emitting check-code for p%d el %d value=%d", pi, i, value)
-				elref, elparm := p.GenElemRef(i, fmt.Sprintf("p%d", pi))
+				elref, elparm := p.GenElemRef(i, genParamRef(p, pi))
 				valstr, value = elparm.GenValue(value, false)
-				if elref == "" || elref == "_" {
+				if elref == "" || elref == "_" || cel == 0 {
 					verb(4, "empty skip p%d el %d", pi, i)
 					continue
 				} else {

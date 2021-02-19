@@ -27,6 +27,7 @@ var maskflag = flag.String("M", "", "Mask containing list of fcn numbers to emit
 
 var reflectflag = flag.Bool("reflect", false, "Include testing of reflect.Call.")
 var recurflag = flag.Bool("recur", true, "Include testing of recursive calls.")
+var takeaddrflag = flag.Bool("takeaddr", true, "Include functions that take the address of their parameters and results.")
 var methodflag = flag.Bool("method", true, "Include testing of method calls.")
 var inlimitflag = flag.Int("inmax", -1, "Max number of input params.")
 var outlimitflag = flag.Int("outmax", -1, "Max number of input params.")
@@ -60,6 +61,9 @@ func setupTunables() {
 	}
 	if !*recurflag {
 		tunables.DisableRecursiveCalls()
+	}
+	if !*takeaddrflag {
+		tunables.DisableTakeAddr()
 	}
 	if !*methodflag {
 		tunables.DisableMethodCalls()

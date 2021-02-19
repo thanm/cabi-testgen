@@ -12,7 +12,8 @@ type structparm struct {
 	sname  string
 	qname  string
 	fields []parm
-	blank  bool
+	isBlank
+	addrTakenHow
 }
 
 func (p structparm) TypeName() string {
@@ -84,14 +85,6 @@ func (p structparm) GenValue(value int, caller bool) (string, int) {
 
 func (p structparm) IsControl() bool {
 	return false
-}
-
-func (p structparm) IsBlank() bool {
-	return p.blank
-}
-
-func (p structparm) SetBlank(v bool) {
-	p.blank = v
 }
 
 func (p structparm) NumElements() int {

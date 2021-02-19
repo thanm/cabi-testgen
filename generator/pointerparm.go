@@ -10,7 +10,8 @@ import (
 type pointerparm struct {
 	tag    string
 	totype parm
-	blank  bool
+	isBlank
+	addrTakenHow
 }
 
 func (p pointerparm) Declare(b *bytes.Buffer, prefix string, suffix string, caller bool) {
@@ -22,7 +23,9 @@ func (p pointerparm) Declare(b *bytes.Buffer, prefix string, suffix string, call
 }
 
 func (p pointerparm) GenElemRef(elidx int, path string) (string, parm) {
-	return path, p
+	var rp parm
+	rp = &p
+	return path, rp
 }
 
 func (p pointerparm) GenValue(value int, caller bool) (string, int) {
@@ -35,14 +38,6 @@ func (p pointerparm) GenValue(value int, caller bool) (string, int) {
 
 func (p pointerparm) IsControl() bool {
 	return false
-}
-
-func (p pointerparm) IsBlank() bool {
-	return p.blank
-}
-
-func (p pointerparm) SetBlank(v bool) {
-	p.blank = v
 }
 
 func (p pointerparm) NumElements() int {

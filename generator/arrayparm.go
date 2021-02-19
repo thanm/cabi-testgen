@@ -12,19 +12,12 @@ type arrayparm struct {
 	qname     string
 	nelements uint8
 	eltype    parm
-	blank     bool
+	isBlank
+	addrTakenHow
 }
 
 func (p arrayparm) IsControl() bool {
 	return false
-}
-
-func (p arrayparm) IsBlank() bool {
-	return p.blank
-}
-
-func (p arrayparm) SetBlank(v bool) {
-	p.blank = v
 }
 
 func (p arrayparm) TypeName() string {
@@ -73,7 +66,9 @@ func (p arrayparm) GenElemRef(elidx int, path string) (string, parm) {
 
 	// For empty arrays, convention is to return empty string
 	if ene == 0 {
-		return "", p
+		var rp parm
+		rp = &p
+		return "", rp
 	}
 
 	// Find slot within array of element of interest
@@ -81,7 +76,7 @@ func (p arrayparm) GenElemRef(elidx int, path string) (string, parm) {
 
 	// If this is the element we're interested in, return it
 	if ene == 1 {
-		//verb(4, "hit scalar element")
+		verb(4, "hit scalar element")
 		epath := fmt.Sprintf("%s[%d]", path, slot)
 		if path == "_" || p.IsBlank() {
 			epath = "_"

@@ -14,4 +14,40 @@ type parm interface {
 	QualName() string
 	IsBlank() bool
 	SetBlank(v bool)
+	AddrTaken() addrTakenHow
+	SetAddrTaken(val addrTakenHow)
+}
+
+type addrTakenHow uint8
+
+const (
+	// Param not address taken.
+	notAddrTaken addrTakenHow = 0
+
+	// Param address is taken and used for simple reads/writes.
+	addrTakenSimple addrTakenHow = 1
+
+	// Param address is taken and passed to a well-behaved function.
+	addrTakenPassed addrTakenHow = 2
+
+	// Param address is taken and stored to a global var.
+	addrTakenHeap addrTakenHow = 3
+)
+
+func (a *addrTakenHow) AddrTaken() addrTakenHow {
+	return *a
+}
+
+func (a *addrTakenHow) SetAddrTaken(val addrTakenHow) {
+	*a = val
+}
+
+type isBlank bool
+
+func (b *isBlank) IsBlank() bool {
+	return bool(*b)
+}
+
+func (b *isBlank) SetBlank(val bool) {
+	*b = isBlank(val)
 }

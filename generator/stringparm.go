@@ -8,8 +8,9 @@ import (
 // stringparm describes a parameter of string type; it implements the
 // "parm" interface
 type stringparm struct {
-	tag   string
-	blank bool
+	tag string
+	isBlank
+	addrTakenHow
 }
 
 func (p stringparm) Declare(b *bytes.Buffer, prefix string, suffix string, caller bool) {
@@ -17,7 +18,9 @@ func (p stringparm) Declare(b *bytes.Buffer, prefix string, suffix string, calle
 }
 
 func (p stringparm) GenElemRef(elidx int, path string) (string, parm) {
-	return path, p
+	var rp parm
+	rp = &p
+	return path, rp
 }
 
 var letters = []rune("�꿦3򂨃f6ꂅ8ˋ<􂊇񊶿(z̽|ϣᇊ񁗇򟄼q񧲥筁{ЂƜĽ")
@@ -35,14 +38,6 @@ func (p stringparm) GenValue(value int, caller bool) (string, int) {
 
 func (p stringparm) IsControl() bool {
 	return false
-}
-
-func (p stringparm) IsBlank() bool {
-	return p.blank
-}
-
-func (p stringparm) SetBlank(v bool) {
-	p.blank = v
 }
 
 func (p stringparm) NumElements() int {

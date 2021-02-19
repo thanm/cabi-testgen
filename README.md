@@ -137,6 +137,8 @@ There are also options to tell the generator avoid using specific constructs:
 
 * "-recur=0" tells the generator to avoid emitting recursive calls
 
+* "-takeaddr=0" tells the generator to avoid taking the address of params or returns.
+
 * "-inmax=N" tells the generator to emit at most N input params (by default number of input paramters is randomly chosen between 0 and 15)
 
 * "-outmax=N" tells the generator to emit at most N output params (by default number of output parameters is randomly chosen between 0 and 15)
@@ -155,5 +157,5 @@ Method calls are supported, but only value receivers (not pointer receivers).
 No support yet for variadic functions.
 
 The set of generated types is still a bit thin; it doesn't yet include
-interfaces, maps or slices.
+interfaces, maps or slices. 
 

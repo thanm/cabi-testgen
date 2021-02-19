@@ -13,11 +13,20 @@ type numparm struct {
 	tag         string
 	widthInBits uint32
 	ctl         bool
-	blank       bool
+	isBlank
+	addrTakenHow
 }
 
-var f32parm *numparm = &numparm{"float", uint32(32), false, false}
-var f64parm *numparm = &numparm{"float", uint32(64), false, false}
+var f32parm *numparm = &numparm{
+	tag:         "float",
+	widthInBits: uint32(32),
+	ctl:         false,
+}
+var f64parm *numparm = &numparm{
+	tag:         "float",
+	widthInBits: uint32(64),
+	ctl:         false,
+}
 
 func (p numparm) TypeName() string {
 	if p.tag == "byte" {
@@ -49,16 +58,10 @@ func (p numparm) IsControl() bool {
 	return p.ctl
 }
 
-func (p numparm) IsBlank() bool {
-	return p.blank
-}
-
-func (p numparm) SetBlank(v bool) {
-	p.blank = v
-}
-
 func (p numparm) GenElemRef(elidx int, path string) (string, parm) {
-	return path, p
+	var rp parm
+	rp = &p
+	return path, rp
 }
 
 func (p numparm) Declare(b *bytes.Buffer, prefix string, suffix string, caller bool) {

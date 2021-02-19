@@ -12,7 +12,8 @@ type typedefparm struct {
 	aname  string
 	qname  string
 	target parm
-	blank  bool
+	isBlank
+	addrTakenHow
 }
 
 func (p typedefparm) Declare(b *bytes.Buffer, prefix string, suffix string, caller bool) {
@@ -24,14 +25,15 @@ func (p typedefparm) Declare(b *bytes.Buffer, prefix string, suffix string, call
 }
 
 func (p typedefparm) GenElemRef(elidx int, path string) (string, parm) {
-	_, isarr := p.target.(arrayparm)
-	_, isstruct := p.target.(structparm)
+	_, isarr := p.target.(*arrayparm)
+	_, isstruct := p.target.(*structparm)
 	rv, rp := p.target.GenElemRef(elidx, path)
 	// this is hacky, but I don't see a nicer way to do this
 	if isarr || isstruct {
 		return rv, rp
 	}
-	return rv, p
+	rp = &p
+	return rv, rp
 }
 
 func (p typedefparm) GenValue(value int, caller bool) (string, int) {
@@ -46,14 +48,6 @@ func (p typedefparm) GenValue(value int, caller bool) (string, int) {
 
 func (p typedefparm) IsControl() bool {
 	return false
-}
-
-func (p typedefparm) IsBlank() bool {
-	return p.blank
-}
-
-func (p typedefparm) SetBlank(v bool) {
-	p.blank = v
 }
 
 func (p typedefparm) NumElements() int {
@@ -80,7 +74,7 @@ func (s *genstate) makeTypedefParm(f *funcdef, target parm, pidx int) parm {
 	tdp.aname = fmt.Sprintf("MyTypeF%dS%d", f.idx, ns)
 	tdp.qname = fmt.Sprintf("%s.MyTypeF%dS%d", s.checkerPkg(pidx), f.idx, ns)
 	tdp.target = target
-	tdp.blank = uint8(rand.Intn(100)) < tunables.blankPerc
+	tdp.SetBlank(uint8(rand.Intn(100)) < tunables.blankPerc)
 	f.typedefs = append(f.typedefs, tdp)
-	return tdp
+	return &tdp
 }
