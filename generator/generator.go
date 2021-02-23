@@ -63,6 +63,9 @@ type TunableParams struct {
 	// If true, then randomly take addresses of params/returns.
 	takeAddress bool
 
+	// Fraction of the time that any params/returns are address taken.
+	takenFraction uint8
+
 	// For a given address-taken param or return, controls the
 	// manner in which the indirect read or write takes
 	// place. This is a set of percentages for
@@ -99,6 +102,7 @@ var tunables = TunableParams{
 	pointerMethodCallPerc: 50,
 	doReflectCall:         false,
 	takeAddress:           true,
+	takenFraction:         20,
 	//addrFractions:         [4]uint8{40, 25, 25, 10},
 	addrFractions: [4]uint8{50, 50, 0, 0},
 }
@@ -160,6 +164,9 @@ func checkTunables(t TunableParams) {
 	}
 	if s != 100 {
 		log.Fatal(errors.New("addrFractions tunable does not sum to 100"))
+	}
+	if t.takenFraction > 100 {
+		log.Fatal(errors.New("takenFraction not between 0 and 100"))
 	}
 }
 
@@ -454,8 +461,12 @@ func (s *genstate) GenFunc(fidx int, pidx int) *funcdef {
 		}
 	}
 	needControl := f.recur
+	pTaken := uint8(rand.Intn(100)) < s.tunables.takenFraction
 	for pi := 0; pi < numParams; pi++ {
 		newparm := s.GenParm(f, 0, needControl, pidx)
+		if !pTaken {
+			newparm.SetAddrTaken(notAddrTaken)
+		}
 		if newparm.IsControl() {
 			needControl = false
 		}
@@ -465,8 +476,13 @@ func (s *genstate) GenFunc(fidx int, pidx int) *funcdef {
 		f.recur = false
 	}
 
+	rTaken := uint8(rand.Intn(100)) < s.tunables.takenFraction
 	for ri := 0; ri < numReturns; ri++ {
-		f.returns = append(f.returns, s.GenReturn(f, 0, pidx))
+		r := s.GenReturn(f, 0, pidx)
+		if !rTaken {
+			r.SetAddrTaken(notAddrTaken)
+		}
+		f.returns = append(f.returns, r)
 	}
 	return f
 }
@@ -611,6 +627,104 @@ func checkableElements(p parm) int {
 	return 1
 }
 
+func genParamRef(p parm, idx int) string {
+	switch p.AddrTaken() {
+	case notAddrTaken:
+		return fmt.Sprintf("p%d", idx)
+	case addrTakenSimple:
+		return fmt.Sprintf("(*ap%d)", idx)
+	default:
+		panic("bad")
+	}
+}
+
+func genReturnRef(r parm, idx int) string {
+	switch r.AddrTaken() {
+	case notAddrTaken:
+		return fmt.Sprintf("r%d", idx)
+	case addrTakenSimple:
+		return fmt.Sprintf("(*ar%d)", idx)
+	default:
+		panic("bad")
+	}
+}
+
+func (s *genstate) emitParamChecks(f *funcdef, b *bytes.Buffer, pidx int, value int) (int, bool) {
+	haveControl := false
+	dangling := []int{}
+	for pi, p := range f.params {
+		verb(4, "emitting parmcheck p%d numel=%d pt=%s value=%d",
+			pi, p.NumElements(), p.TypeName(), value)
+		if p.IsControl() {
+			b.WriteString(fmt.Sprintf("  if %s == 0 {\n",
+				genParamRef(p, pi)))
+			emitReturn(f, b, false)
+			b.WriteString("  }\n")
+			haveControl = true
+		} else if p.IsBlank() {
+			var valstr string
+			valstr, value = p.GenValue(value, false)
+			if f.recur {
+				b.WriteString(fmt.Sprintf("  brc%d := %s\n", pi, valstr))
+			} else {
+				b.WriteString(fmt.Sprintf("  _ = %s\n", valstr))
+			}
+		} else {
+			numel := p.NumElements()
+			cel := checkableElements(p)
+			for i := 0; i < numel; i++ {
+				var valstr string
+				verb(4, "emitting check-code for p%d el %d value=%d", pi, i, value)
+				elref, elparm := p.GenElemRef(i, genParamRef(p, pi))
+				valstr, value = elparm.GenValue(value, false)
+				if elref == "" || elref == "_" || cel == 0 {
+					verb(4, "empty skip p%d el %d", pi, i)
+					continue
+				} else {
+					b.WriteString(fmt.Sprintf("  p%df%dc := %s\n", pi, i, valstr))
+					b.WriteString(fmt.Sprintf("  if %s != p%df%dc {\n", elref, pi, i))
+					b.WriteString(fmt.Sprintf("    %s.NoteFailureElem(%d, \"%s\", \"parm\", %d, %d, pad[0])\n", s.utilsPkg(), f.idx, s.checkerPkg(pidx), pi, i))
+					b.WriteString("    return\n")
+					b.WriteString("  }\n")
+				}
+			}
+			if cel == 0 && p.AddrTaken() != notAddrTaken {
+				dangling = append(dangling, pi)
+			}
+		}
+		if value != f.values[pi] {
+			fmt.Fprintf(os.Stderr, "internal error: checker/caller value mismatch after emitting param %d func Test%d pkg %s: caller %d checker %d\n", pi, f.idx, s.checkerPkg(pidx), f.values[pi], value)
+			s.errs++
+		}
+	}
+	for _, pi := range dangling {
+		b.WriteString(fmt.Sprintf("  _ = ap%d // ref\n", pi))
+	}
+
+	// receiver value check
+	if f.method && !f.receiver.IsBlank() {
+		numel := f.receiver.NumElements()
+		for i := 0; i < numel; i++ {
+			var valstr string
+			verb(4, "emitting check-code for rcvr el %d value=%d", i, value)
+			elref, elparm := f.receiver.GenElemRef(i, "rcvr")
+			valstr, value = elparm.GenValue(value, false)
+			if elref == "" || strings.HasPrefix(elref, "_") {
+				verb(4, "empty skip rcvr el %d", i)
+				continue
+			} else {
+				b.WriteString(fmt.Sprintf("  rcvrf%dc := %s\n", i, valstr))
+				b.WriteString(fmt.Sprintf("  if %s != rcvrf%dc {\n", elref, i))
+				b.WriteString(fmt.Sprintf("    %s.NoteFailureElem(%d, \"%s\", \"rcvr\", %d, -1, pad[0])\n", s.utilsPkg(), f.idx, s.checkerPkg(pidx), i))
+				b.WriteString("    return\n")
+				b.WriteString("  }\n")
+			}
+		}
+	}
+
+	return value, haveControl
+}
+
 func (s *genstate) emitChecker(f *funcdef, b *bytes.Buffer, pidx int) {
 	verb(4, "emitting struct and array defs")
 	emitStructAndArrayDefs(f, b)
@@ -673,141 +787,121 @@ func (s *genstate) emitChecker(f *funcdef, b *bytes.Buffer, pidx int) {
 		b.WriteString(fmt.Sprintf("  rc%d := %s\n", ri, valstr))
 	}
 
-	// Helper function to generate param read reference.
-	genParamRef := func(p parm, idx int) string {
-		switch p.AddrTaken() {
-		case notAddrTaken:
-			return fmt.Sprintf("p%d", idx)
-		case addrTakenSimple:
-			return fmt.Sprintf("(*ap%d)", idx)
-		default:
-			panic("bad")
-		}
-	}
-	for pi, p := range f.params {
-		if checkableElements(p) == 0 {
-			continue
-		}
-		switch p.AddrTaken() {
-		case notAddrTaken:
-			// all set
-		case addrTakenSimple:
-			b.WriteString(fmt.Sprintf("  ap%d := &p%d\n", pi, pi))
-		default:
-			panic("bad")
+	// Prepare to reference params/returns by address.
+	lists := [][]parm{f.params, f.returns}
+	names := []string{"p", "r"}
+	for i, lst := range lists {
+		for pi, p := range lst {
+			switch p.AddrTaken() {
+			case notAddrTaken:
+				// all set
+			case addrTakenSimple:
+				n := names[i]
+				b.WriteString(fmt.Sprintf("  a%s%d := &%s%d\n", n, pi, n, pi))
+			default:
+				panic("bad")
+			}
 		}
 	}
 
 	// parameter checking code
-	haveControl := false
-	for pi, p := range f.params {
-		verb(4, "emitting parm checking code for p%d numel=%d pt=%s value=%d", pi, p.NumElements(), p.TypeName(), value)
+	var haveControl bool
+	value, haveControl = s.emitParamChecks(f, b, pidx, value)
 
-		if p.IsControl() {
-			b.WriteString(fmt.Sprintf("  if %s == 0 {\n",
-				genParamRef(p, pi)))
-			emitReturnConst(f, b)
-			b.WriteString("  }\n")
-			haveControl = true
-		} else if p.IsBlank() {
-			var valstr string
-			valstr, value = p.GenValue(value, false)
-			if f.recur {
-				b.WriteString(fmt.Sprintf("  brc%d := %s\n", pi, valstr))
-			} else {
-				b.WriteString(fmt.Sprintf("  _ = %s\n", valstr))
-			}
-		} else {
-			numel := p.NumElements()
-			cel := checkableElements(p)
-			for i := 0; i < numel; i++ {
-				var valstr string
-				verb(4, "emitting check-code for p%d el %d value=%d", pi, i, value)
-				elref, elparm := p.GenElemRef(i, genParamRef(p, pi))
-				valstr, value = elparm.GenValue(value, false)
-				if elref == "" || elref == "_" || cel == 0 {
-					verb(4, "empty skip p%d el %d", pi, i)
-					continue
-				} else {
-					b.WriteString(fmt.Sprintf("  p%df%dc := %s\n", pi, i, valstr))
-					b.WriteString(fmt.Sprintf("  if %s != p%df%dc {\n", elref, pi, i))
-					b.WriteString(fmt.Sprintf("    %s.NoteFailureElem(%d, \"%s\", \"parm\", %d, %d, pad[0])\n", s.utilsPkg(), f.idx, s.checkerPkg(pidx), pi, i))
-					b.WriteString("    return\n")
-					b.WriteString("  }\n")
-				}
-			}
-		}
-		if value != f.values[pi] {
-			fmt.Fprintf(os.Stderr, "internal error: checker/caller value mismatch after emitting param %d func Test%d pkg %s: caller %d checker %d\n", pi, f.idx, s.checkerPkg(pidx), f.values[pi], value)
-			s.errs++
-		}
-	}
-
-	// receiver value check
-	if f.method && !f.receiver.IsBlank() {
-		numel := f.receiver.NumElements()
-		for i := 0; i < numel; i++ {
-			var valstr string
-			verb(4, "emitting check-code for rcvr el %d value=%d", i, value)
-			elref, elparm := f.receiver.GenElemRef(i, "rcvr")
-			valstr, value = elparm.GenValue(value, false)
-			if elref == "" || strings.HasPrefix(elref, "_") {
-				verb(4, "empty skip rcvr el %d", i)
-				continue
-			} else {
-				b.WriteString(fmt.Sprintf("  rcvrf%dc := %s\n", i, valstr))
-				b.WriteString(fmt.Sprintf("  if %s != rcvrf%dc {\n", elref, i))
-				b.WriteString(fmt.Sprintf("    %s.NoteFailureElem(%d, \"%s\", \"rcvr\", %d, -1, pad[0])\n", s.utilsPkg(), f.idx, s.checkerPkg(pidx), i))
-				b.WriteString("    return\n")
-				b.WriteString("  }\n")
-			}
-		}
-	}
-
-	// return recursive call if we have a control, const val otherwise
-	if haveControl {
-		b.WriteString(" // recursive call\n")
-		if len(f.returns) > 0 {
-			b.WriteString(" return ")
-		}
-		rcvr := ""
-		if f.method {
-			rcvr = "rcvr."
-		}
-		b.WriteString(fmt.Sprintf(" %sTest%d(", rcvr, f.idx))
-		for pi, p := range f.params {
-			writeCom(b, pi)
-			if p.IsControl() {
-				b.WriteString(fmt.Sprintf(" p%d-1", pi))
-			} else {
-				if !p.IsBlank() {
-					b.WriteString(fmt.Sprintf(" p%d", pi))
-				} else {
-					b.WriteString(fmt.Sprintf(" brc%d", pi))
-				}
-			}
-		}
-		b.WriteString(")\n")
-		if len(f.returns) == 0 {
-			b.WriteString(" return\n")
-		}
-	} else {
-		emitReturnConst(f, b)
-	}
+	// returns
+	emitReturn(f, b, haveControl)
 
 	b.WriteString("}\n\n")
 }
 
-func emitReturnConst(f *funcdef, b *bytes.Buffer) {
-	// returning code
-	b.WriteString("  return ")
-	if len(f.returns) > 0 {
-		for ri := range f.returns {
-			writeCom(b, ri)
-			b.WriteString(fmt.Sprintf("rc%d", ri))
+// emitRecursiveCall generates a recursive call to the test function in question.
+func emitRecursiveCall(f *funcdef) string {
+	b := bytes.NewBuffer(nil)
+	rcvr := ""
+	if f.method {
+		rcvr = "rcvr."
+	}
+	b.WriteString(fmt.Sprintf(" %sTest%d(", rcvr, f.idx))
+	for pi, p := range f.params {
+		writeCom(b, pi)
+		if p.IsControl() {
+			b.WriteString(fmt.Sprintf(" %s-1", genParamRef(p, pi)))
+		} else {
+			if !p.IsBlank() {
+				b.WriteString(fmt.Sprintf(" %s", genParamRef(p, pi)))
+			} else {
+				b.WriteString(fmt.Sprintf(" brc%d", pi))
+			}
 		}
 	}
-	b.WriteString("\n")
+	b.WriteString(")")
+	return b.String()
+}
+
+// emitReturn generates a return sequence.
+func emitReturn(f *funcdef, b *bytes.Buffer, doRecursiveCall bool) {
+	// If any of the return values are address-taken, then instead of
+	//
+	//   return x, y, z
+	//
+	// we emit
+	//
+	//   r1 = ...
+	//   r2 = ...
+	//   ...
+	//   return
+	//
+	// Make an initial pass through the returns to see if we need to do this.
+	// Figure out the final return values in the process.
+	indirectReturn := false
+	retvals := []string{}
+	for ri, r := range f.returns {
+		if r.AddrTaken() != notAddrTaken {
+			indirectReturn = true
+		}
+		t := ""
+		if doRecursiveCall {
+			t = "t"
+		}
+		retvals = append(retvals, fmt.Sprintf("rc%s%d", t, ri))
+	}
+
+	// generate the recursive call itself if applicable
+	if doRecursiveCall {
+		b.WriteString("  // recursive call\n  ")
+		rcall := emitRecursiveCall(f)
+		if indirectReturn {
+			for ri := range f.returns {
+				writeCom(b, ri)
+				b.WriteString(fmt.Sprintf("rct%d", ri))
+			}
+			b.WriteString(" := ")
+			b.WriteString(rcall)
+			b.WriteString("\n")
+		} else {
+			if len(f.returns) == 0 {
+				b.WriteString(fmt.Sprintf("  %s\n  return\n", rcall))
+			} else {
+				b.WriteString(fmt.Sprintf("return %s\n", rcall))
+			}
+			return
+		}
+	}
+
+	// now the actual return
+	if indirectReturn {
+		for ri, r := range f.returns {
+			b.WriteString(fmt.Sprintf("  %s = %s\n", genReturnRef(r, ri), retvals[ri]))
+		}
+		b.WriteString("  return\n")
+	} else {
+		b.WriteString("  return ")
+		for ri := range f.returns {
+			writeCom(b, ri)
+			b.WriteString(retvals[ri])
+		}
+		b.WriteString("\n")
+	}
 }
 
 func (s *genstate) GenPair(calloutfile *os.File, checkoutfile *os.File, fidx int, pidx int, b *bytes.Buffer, seed int64, emit bool) int64 {
