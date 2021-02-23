@@ -10,10 +10,21 @@ import (
 	"testing"
 )
 
+func mkGenState() *genstate {
+	return &genstate{
+		outdir: "/tmp",
+		ipref:  "foo/",
+		tag:    "gen",
+		numtpk: 1,
+		pfuncs: make(map[string]string),
+		rfuncs: make(map[string]string),
+	}
+}
+
 func TestBasic(t *testing.T) {
 	rand.Seed(0)
 	checkTunables(tunables)
-	s := &genstate{outdir: "/tmp", ipref: "foo/", tag: "gen", numtpk: 1}
+	s := mkGenState()
 	for i := 0; i < 1000; i++ {
 		fp := s.GenFunc(i, i)
 		var buf bytes.Buffer
@@ -32,7 +43,7 @@ func TestMoreComplicated(t *testing.T) {
 	defer func() { tunables = saveit }()
 
 	checkTunables(tunables)
-	s := &genstate{outdir: "/tmp", ipref: "foo/", tag: "gen", numtpk: 1}
+	s := mkGenState()
 	for i := 0; i < 10000; i++ {
 		fp := s.GenFunc(i, i)
 		var buf bytes.Buffer

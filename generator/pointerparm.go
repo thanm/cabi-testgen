@@ -55,3 +55,10 @@ func (p pointerparm) TypeName() string {
 func (p pointerparm) QualName() string {
 	return fmt.Sprintf("*%s", p.totype.QualName())
 }
+
+func mkPointerParm(to parm) pointerparm {
+	var pp pointerparm
+	pp.tag = "pointer"
+	pp.totype = to
+	return pp
+}

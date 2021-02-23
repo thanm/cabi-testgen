@@ -104,7 +104,7 @@ var tunables = TunableParams{
 	takeAddress:           true,
 	takenFraction:         20,
 	//addrFractions:         [4]uint8{40, 25, 25, 10},
-	addrFractions: [4]uint8{50, 50, 0, 0},
+	addrFractions: [4]uint8{50, 25, 25, 0},
 }
 
 func DefaultTunables() TunableParams {
@@ -409,9 +409,7 @@ func (s *genstate) GenParm(f *funcdef, depth int, mkctl bool, pidx int) parm {
 		}
 	case which < tf[6]:
 		{
-			var pp pointerparm
-			pp.tag = "pointer"
-			pp.totype = s.GenParm(f, depth, false, pidx)
+			pp := mkPointerParm(s.GenParm(f, depth, false, pidx))
 			retval = &pp
 		}
 	case which < tf[7]:
@@ -627,23 +625,102 @@ func checkableElements(p parm) int {
 	return 1
 }
 
-func genParamRef(p parm, idx int) string {
+type funcdesc struct {
+	p    parm
+	pp   parm
+	name string
+}
+
+func (s *genstate) emitDerefFuncs(b *bytes.Buffer) {
+	for _, fd := range s.newpfuncs {
+		b.WriteString("\n//go:noinline\n")
+		b.WriteString(fmt.Sprintf("func %s(", fd.name))
+		fd.pp.Declare(b, "x", "", false)
+		b.WriteString(") ")
+		fd.p.Declare(b, "", "", false)
+		b.WriteString(" {\n")
+		b.WriteString("  return *x\n")
+		b.WriteString("}\n")
+	}
+	s.newpfuncs = nil
+}
+
+func (s *genstate) emitAssignFuncs(b *bytes.Buffer) {
+	for _, fd := range s.newrfuncs {
+		b.WriteString("\n//go:noinline\n")
+		b.WriteString(fmt.Sprintf("func %s(", fd.name))
+		fd.pp.Declare(b, "x", "", false)
+		b.WriteString(", ")
+		fd.p.Declare(b, "v", "", false)
+		b.WriteString(") {\n")
+		b.WriteString("  *x = v\n")
+		b.WriteString("}\n")
+	}
+	s.newrfuncs = nil
+}
+
+func (s *genstate) emitAddrTakenHelpers(b *bytes.Buffer) {
+	s.emitDerefFuncs(b)
+	s.emitAssignFuncs(b)
+}
+
+func (s *genstate) genParamDerefFunc(p parm) string {
+	var pp parm
+	ppp := mkPointerParm(p)
+	pp = &ppp
+	b := bytes.NewBuffer(nil)
+	pp.Declare(b, "x", "", false)
+	tag := b.String()
+	f, ok := s.pfuncs[tag]
+	if ok {
+		return f
+	}
+	f = fmt.Sprintf("deref_%d", len(s.pfuncs))
+	s.newpfuncs = append(s.newpfuncs, funcdesc{pp: pp, p: p, name: f})
+	s.pfuncs[tag] = f
+	return f
+}
+
+func (s *genstate) genAssignFunc(p parm) string {
+	var pp parm
+	ppp := mkPointerParm(p)
+	pp = &ppp
+	b := bytes.NewBuffer(nil)
+	pp.Declare(b, "x", "", false)
+	tag := b.String()
+	f, ok := s.rfuncs[tag]
+	if ok {
+		return f
+	}
+	f = fmt.Sprintf("retassign_%d", len(s.rfuncs))
+	s.newrfuncs = append(s.newrfuncs, funcdesc{pp: pp, p: p, name: f})
+	s.rfuncs[tag] = f
+	return f
+}
+
+func (s *genstate) genParamRef(p parm, idx int) string {
 	switch p.AddrTaken() {
 	case notAddrTaken:
 		return fmt.Sprintf("p%d", idx)
 	case addrTakenSimple:
 		return fmt.Sprintf("(*ap%d)", idx)
+	case addrTakenPassed:
+		f := s.genParamDerefFunc(p)
+		return fmt.Sprintf("%s(ap%d)", f, idx)
 	default:
 		panic("bad")
 	}
 }
 
-func genReturnRef(r parm, idx int) string {
+func (s *genstate) genReturnAssign(b *bytes.Buffer, r parm, idx int, val string) {
 	switch r.AddrTaken() {
 	case notAddrTaken:
-		return fmt.Sprintf("r%d", idx)
+		b.WriteString(fmt.Sprintf("r%d = %s\n", idx, val))
 	case addrTakenSimple:
-		return fmt.Sprintf("(*ar%d)", idx)
+		b.WriteString(fmt.Sprintf("(*ar%d) = %v\n", idx, val))
+	case addrTakenPassed:
+		f := s.genAssignFunc(r)
+		b.WriteString(fmt.Sprintf("%s(ar%d, %v)\n", f, idx, val))
 	default:
 		panic("bad")
 	}
@@ -657,8 +734,8 @@ func (s *genstate) emitParamChecks(f *funcdef, b *bytes.Buffer, pidx int, value 
 			pi, p.NumElements(), p.TypeName(), value)
 		if p.IsControl() {
 			b.WriteString(fmt.Sprintf("  if %s == 0 {\n",
-				genParamRef(p, pi)))
-			emitReturn(f, b, false)
+				s.genParamRef(p, pi)))
+			s.emitReturn(f, b, false)
 			b.WriteString("  }\n")
 			haveControl = true
 		} else if p.IsBlank() {
@@ -675,7 +752,7 @@ func (s *genstate) emitParamChecks(f *funcdef, b *bytes.Buffer, pidx int, value 
 			for i := 0; i < numel; i++ {
 				var valstr string
 				verb(4, "emitting check-code for p%d el %d value=%d", pi, i, value)
-				elref, elparm := p.GenElemRef(i, genParamRef(p, pi))
+				elref, elparm := p.GenElemRef(i, s.genParamRef(p, pi))
 				valstr, value = elparm.GenValue(value, false)
 				if elref == "" || elref == "_" || cel == 0 {
 					verb(4, "empty skip p%d el %d", pi, i)
@@ -795,7 +872,7 @@ func (s *genstate) emitChecker(f *funcdef, b *bytes.Buffer, pidx int) {
 			switch p.AddrTaken() {
 			case notAddrTaken:
 				// all set
-			case addrTakenSimple:
+			case addrTakenSimple, addrTakenPassed:
 				n := names[i]
 				b.WriteString(fmt.Sprintf("  a%s%d := &%s%d\n", n, pi, n, pi))
 			default:
@@ -809,13 +886,16 @@ func (s *genstate) emitChecker(f *funcdef, b *bytes.Buffer, pidx int) {
 	value, haveControl = s.emitParamChecks(f, b, pidx, value)
 
 	// returns
-	emitReturn(f, b, haveControl)
+	s.emitReturn(f, b, haveControl)
 
 	b.WriteString("}\n\n")
+
+	// emit any new helper funcs referenced by this test function
+	s.emitAddrTakenHelpers(b)
 }
 
 // emitRecursiveCall generates a recursive call to the test function in question.
-func emitRecursiveCall(f *funcdef) string {
+func (s *genstate) emitRecursiveCall(f *funcdef) string {
 	b := bytes.NewBuffer(nil)
 	rcvr := ""
 	if f.method {
@@ -825,10 +905,10 @@ func emitRecursiveCall(f *funcdef) string {
 	for pi, p := range f.params {
 		writeCom(b, pi)
 		if p.IsControl() {
-			b.WriteString(fmt.Sprintf(" %s-1", genParamRef(p, pi)))
+			b.WriteString(fmt.Sprintf(" %s-1", s.genParamRef(p, pi)))
 		} else {
 			if !p.IsBlank() {
-				b.WriteString(fmt.Sprintf(" %s", genParamRef(p, pi)))
+				b.WriteString(fmt.Sprintf(" %s", s.genParamRef(p, pi)))
 			} else {
 				b.WriteString(fmt.Sprintf(" brc%d", pi))
 			}
@@ -839,7 +919,7 @@ func emitRecursiveCall(f *funcdef) string {
 }
 
 // emitReturn generates a return sequence.
-func emitReturn(f *funcdef, b *bytes.Buffer, doRecursiveCall bool) {
+func (s *genstate) emitReturn(f *funcdef, b *bytes.Buffer, doRecursiveCall bool) {
 	// If any of the return values are address-taken, then instead of
 	//
 	//   return x, y, z
@@ -869,7 +949,7 @@ func emitReturn(f *funcdef, b *bytes.Buffer, doRecursiveCall bool) {
 	// generate the recursive call itself if applicable
 	if doRecursiveCall {
 		b.WriteString("  // recursive call\n  ")
-		rcall := emitRecursiveCall(f)
+		rcall := s.emitRecursiveCall(f)
 		if indirectReturn {
 			for ri := range f.returns {
 				writeCom(b, ri)
@@ -891,7 +971,7 @@ func emitReturn(f *funcdef, b *bytes.Buffer, doRecursiveCall bool) {
 	// now the actual return
 	if indirectReturn {
 		for ri, r := range f.returns {
-			b.WriteString(fmt.Sprintf("  %s = %s\n", genReturnRef(r, ri), retvals[ri]))
+			s.genReturnAssign(b, r, ri, retvals[ri])
 		}
 		b.WriteString("  return\n")
 	} else {
@@ -1000,14 +1080,18 @@ func makeDir(d string) {
 }
 
 type genstate struct {
-	outdir   string
-	ipref    string
-	tag      string
-	numtpk   int
-	errs     int
-	pragma   string
-	tunables TunableParams
-	tstack   []TunableParams
+	outdir    string
+	ipref     string
+	tag       string
+	numtpk    int
+	errs      int
+	pragma    string
+	tunables  TunableParams
+	tstack    []TunableParams
+	pfuncs    map[string]string
+	newpfuncs []funcdesc
+	rfuncs    map[string]string
+	newrfuncs []funcdesc
 }
 
 func (s *genstate) callerPkg(which int) string {
@@ -1040,7 +1124,13 @@ func Generate(tag string, outdir string, pkgpath string, numit int, numtpkgs int
 		ipref = pkgpath + "/"
 	}
 
-	s := genstate{outdir: outdir, ipref: ipref, tag: tag, numtpk: numtpkgs, pragma: pragma}
+	s := genstate{
+		outdir: outdir,
+		ipref:  ipref,
+		tag:    tag,
+		numtpk: numtpkgs,
+		pragma: pragma,
+	}
 
 	if outdir != "." {
 		makeDir(outdir)
@@ -1074,6 +1164,11 @@ func Generate(tag string, outdir string, pkgpath string, numit int, numtpkgs int
 			callerImports, ipref)
 		checkeroutfile := openOutputFile(s.checkerFile(k), s.checkerPkg(k),
 			[]string{s.utilsPkg()}, ipref)
+
+		s.newpfuncs = nil
+		s.newrfuncs = nil
+		s.pfuncs = make(map[string]string)
+		s.rfuncs = make(map[string]string)
 
 		var b bytes.Buffer
 		for i := 0; i < numit; i++ {
