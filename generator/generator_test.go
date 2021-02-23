@@ -18,6 +18,7 @@ func mkGenState() *genstate {
 		numtpk: 1,
 		pfuncs: make(map[string]string),
 		rfuncs: make(map[string]string),
+		gvars:  make(map[string]string),
 	}
 }
 

@@ -104,7 +104,7 @@ var tunables = TunableParams{
 	takeAddress:           true,
 	takenFraction:         20,
 	//addrFractions:         [4]uint8{40, 25, 25, 10},
-	addrFractions: [4]uint8{50, 25, 25, 0},
+	addrFractions: [4]uint8{50, 25, 15, 10},
 }
 
 func DefaultTunables() TunableParams {
@@ -239,6 +239,23 @@ type funcdef struct {
 	values     []int
 	recur      bool
 	method     bool
+}
+
+type genstate struct {
+	outdir    string
+	ipref     string
+	tag       string
+	numtpk    int
+	errs      int
+	pragma    string
+	tunables  TunableParams
+	tstack    []TunableParams
+	pfuncs    map[string]string
+	newpfuncs []funcdesc
+	rfuncs    map[string]string
+	newrfuncs []funcdesc
+	gvars     map[string]string
+	newgvars  []funcdesc
 }
 
 func (s *genstate) intFlavor() string {
@@ -659,9 +676,38 @@ func (s *genstate) emitAssignFuncs(b *bytes.Buffer) {
 	s.newrfuncs = nil
 }
 
+func (s *genstate) emitGlobalVars(b *bytes.Buffer) {
+	for _, fd := range s.newgvars {
+		b.WriteString("\n")
+		b.WriteString("var ")
+		fd.pp.Declare(b, fd.name, "", false)
+		b.WriteString("\n")
+	}
+	s.newgvars = nil
+	b.WriteString("\n")
+}
+
 func (s *genstate) emitAddrTakenHelpers(b *bytes.Buffer) {
 	s.emitDerefFuncs(b)
 	s.emitAssignFuncs(b)
+	s.emitGlobalVars(b)
+}
+
+func (s *genstate) genGvar(p parm) string {
+	var pp parm
+	ppp := mkPointerParm(p)
+	pp = &ppp
+	b := bytes.NewBuffer(nil)
+	pp.Declare(b, "gv", "", false)
+	tag := b.String()
+	gv, ok := s.gvars[tag]
+	if ok {
+		return gv
+	}
+	gv = fmt.Sprintf("gvar_%d", len(s.gvars))
+	s.newgvars = append(s.newgvars, funcdesc{pp: pp, p: p, name: gv})
+	s.gvars[tag] = gv
+	return gv
 }
 
 func (s *genstate) genParamDerefFunc(p parm) string {
@@ -702,7 +748,7 @@ func (s *genstate) genParamRef(p parm, idx int) string {
 	switch p.AddrTaken() {
 	case notAddrTaken:
 		return fmt.Sprintf("p%d", idx)
-	case addrTakenSimple:
+	case addrTakenSimple, addrTakenHeap:
 		return fmt.Sprintf("(*ap%d)", idx)
 	case addrTakenPassed:
 		f := s.genParamDerefFunc(p)
@@ -716,7 +762,7 @@ func (s *genstate) genReturnAssign(b *bytes.Buffer, r parm, idx int, val string)
 	switch r.AddrTaken() {
 	case notAddrTaken:
 		b.WriteString(fmt.Sprintf("r%d = %s\n", idx, val))
-	case addrTakenSimple:
+	case addrTakenSimple, addrTakenHeap:
 		b.WriteString(fmt.Sprintf("(*ar%d) = %v\n", idx, val))
 	case addrTakenPassed:
 		f := s.genAssignFunc(r)
@@ -867,16 +913,18 @@ func (s *genstate) emitChecker(f *funcdef, b *bytes.Buffer, pidx int) {
 	// Prepare to reference params/returns by address.
 	lists := [][]parm{f.params, f.returns}
 	names := []string{"p", "r"}
+	var aCounts [2]int
 	for i, lst := range lists {
 		for pi, p := range lst {
-			switch p.AddrTaken() {
-			case notAddrTaken:
-				// all set
-			case addrTakenSimple, addrTakenPassed:
-				n := names[i]
-				b.WriteString(fmt.Sprintf("  a%s%d := &%s%d\n", n, pi, n, pi))
-			default:
-				panic("bad")
+			if p.AddrTaken() == notAddrTaken {
+				continue
+			}
+			aCounts[i]++
+			n := names[i]
+			b.WriteString(fmt.Sprintf("  a%s%d := &%s%d\n", n, pi, n, pi))
+			if p.AddrTaken() == addrTakenHeap {
+				gv := s.genGvar(p)
+				b.WriteString(fmt.Sprintf("  %s = a%s%d\n", gv, n, pi))
 			}
 		}
 	}
@@ -887,6 +935,9 @@ func (s *genstate) emitChecker(f *funcdef, b *bytes.Buffer, pidx int) {
 
 	// returns
 	s.emitReturn(f, b, haveControl)
+
+	b.WriteString(fmt.Sprintf("  // %d addr-taken params, %d addr-taken returns\n",
+		aCounts[0], aCounts[1]))
 
 	b.WriteString("}\n\n")
 
@@ -1079,21 +1130,6 @@ func makeDir(d string) {
 	os.Mkdir(d, 0777)
 }
 
-type genstate struct {
-	outdir    string
-	ipref     string
-	tag       string
-	numtpk    int
-	errs      int
-	pragma    string
-	tunables  TunableParams
-	tstack    []TunableParams
-	pfuncs    map[string]string
-	newpfuncs []funcdesc
-	rfuncs    map[string]string
-	newrfuncs []funcdesc
-}
-
 func (s *genstate) callerPkg(which int) string {
 	return s.tag + "Caller" + strconv.Itoa(which)
 }
@@ -1167,8 +1203,10 @@ func Generate(tag string, outdir string, pkgpath string, numit int, numtpkgs int
 
 		s.newpfuncs = nil
 		s.newrfuncs = nil
+		s.newgvars = nil
 		s.pfuncs = make(map[string]string)
 		s.rfuncs = make(map[string]string)
+		s.gvars = make(map[string]string)
 
 		var b bytes.Buffer
 		for i := 0; i < numit; i++ {
