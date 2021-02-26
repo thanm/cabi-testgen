@@ -1,9 +1,11 @@
 # cabi-testgen
 
-Rudimentary test harness for C-ABI testing. Randomly generates functions with
-interesting signatures (mix of arrays, scalars, structs) plus code to call it
-with specific values. The resulting program (when run) includes code to call
-each test function and verify that values are being passed/received properly.
+Rudimentary test harness for ABI testing for Go programs.
+
+Randomly generates Go functions that have interesting signatures (mix of arrays,
+scalars, structs) plus code to call the emitted functions with specific
+values. The resulting program (when run) executes code to call each test
+function and verify that values are being passed/received properly.
 
 This can be used "as is" or by building one half of the test (caller or callee)
 with a "good" compiler and the other half with a "suspect" compiler, then test
