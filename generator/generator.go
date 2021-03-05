@@ -100,7 +100,7 @@ var tunables = TunableParams{
 	recurPerc:             20,
 	methodPerc:            10,
 	pointerMethodCallPerc: 50,
-	doReflectCall:         false,
+	doReflectCall:         true,
 	takeAddress:           true,
 	takenFraction:         20,
 	//addrFractions:         [4]uint8{40, 25, 25, 10},
