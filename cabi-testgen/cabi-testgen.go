@@ -26,6 +26,7 @@ var numtpkflag = flag.Int("q", 1, "Number of test packages")
 var maskflag = flag.String("M", "", "Mask containing list of fcn numbers to emit")
 
 var reflectflag = flag.Bool("reflect", true, "Include testing of reflect.Call.")
+var deferflag = flag.Bool("defer", true, "Include testing of defer stmts.")
 var recurflag = flag.Bool("recur", true, "Include testing of recursive calls.")
 var takeaddrflag = flag.Bool("takeaddr", true, "Include functions that take the address of their parameters and results.")
 var methodflag = flag.Bool("method", true, "Include testing of method calls.")
@@ -58,6 +59,9 @@ func setupTunables() {
 	tunables := generator.DefaultTunables()
 	if !*reflectflag {
 		tunables.DisableReflectionCalls()
+	}
+	if !*deferflag {
+		tunables.DisableDefer()
 	}
 	if !*recurflag {
 		tunables.DisableRecursiveCalls()

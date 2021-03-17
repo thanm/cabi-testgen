@@ -75,6 +75,12 @@ type TunableParams struct {
 	// function, and "heap" means that the address is assigned to
 	// a global.
 	addrFractions [4]uint8
+
+	// If true, then perform testing of go/defer statements.
+	doDefer bool
+
+	// fraction of test functions for which we emit a defer
+	deferFraction uint8
 }
 
 var tunables = TunableParams{
@@ -101,10 +107,11 @@ var tunables = TunableParams{
 	methodPerc:            10,
 	pointerMethodCallPerc: 50,
 	doReflectCall:         true,
+	doDefer:               true,
 	takeAddress:           true,
 	takenFraction:         20,
-	//addrFractions:         [4]uint8{40, 25, 25, 10},
-	addrFractions: [4]uint8{50, 25, 15, 10},
+	deferFraction:         30,
+	addrFractions:         [4]uint8{50, 25, 15, 10},
 }
 
 func DefaultTunables() TunableParams {
@@ -168,6 +175,9 @@ func checkTunables(t TunableParams) {
 	if t.takenFraction > 100 {
 		log.Fatal(errors.New("takenFraction not between 0 and 100"))
 	}
+	if t.deferFraction > 100 {
+		log.Fatal(errors.New("deferFraction not between 0 and 100"))
+	}
 }
 
 func SetTunables(t TunableParams) {
@@ -189,6 +199,10 @@ func (t *TunableParams) DisableMethodCalls() {
 
 func (t *TunableParams) DisableTakeAddr() {
 	t.takeAddress = false
+}
+
+func (t *TunableParams) DisableDefer() {
+	t.doDefer = false
 }
 
 func (t *TunableParams) LimitInputs(n int) error {
@@ -761,12 +775,12 @@ func (s *genstate) genParamRef(p parm, idx int) string {
 func (s *genstate) genReturnAssign(b *bytes.Buffer, r parm, idx int, val string) {
 	switch r.AddrTaken() {
 	case notAddrTaken:
-		b.WriteString(fmt.Sprintf("r%d = %s\n", idx, val))
+		b.WriteString(fmt.Sprintf("  r%d = %s\n", idx, val))
 	case addrTakenSimple, addrTakenHeap:
-		b.WriteString(fmt.Sprintf("(*ar%d) = %v\n", idx, val))
+		b.WriteString(fmt.Sprintf("  (*ar%d) = %v\n", idx, val))
 	case addrTakenPassed:
 		f := s.genAssignFunc(r)
-		b.WriteString(fmt.Sprintf("%s(ar%d, %v)\n", f, idx, val))
+		b.WriteString(fmt.Sprintf("  %s(ar%d, %v)\n", f, idx, val))
 	default:
 		panic("bad")
 	}
@@ -846,6 +860,88 @@ func (s *genstate) emitParamChecks(f *funcdef, b *bytes.Buffer, pidx int, value 
 	}
 
 	return value, haveControl
+}
+
+// emitDeferChecks creates code like
+//
+//     defer func(...args...) {
+//       check arg
+//       check param
+//     }(...)
+//
+// where we randomly choose to either pass a param through to the function literal,
+// or have the param captured by the closure, then check its value in the defer.
+func (s *genstate) emitDeferChecks(f *funcdef, b *bytes.Buffer, pidx int, value int) int {
+
+	if len(f.params) == 0 {
+		return value
+	}
+
+	// make a pass through the params and randomly decide which will be passed into the func.
+	passed := []bool{}
+	for range f.params {
+		p := rand.Intn(100) < 50
+		passed = append(passed, p)
+	}
+
+	b.WriteString("  defer func(")
+	pc := 0
+	for pi, p := range f.params {
+		if p.IsControl() || p.IsBlank() {
+			continue
+		}
+		if passed[pi] {
+			if pc != 0 {
+				b.WriteString(", ")
+			}
+			n := fmt.Sprintf("p%d", pi)
+			p.Declare(b, n, "", false)
+			pc++
+		}
+	}
+	b.WriteString(") {\n")
+
+	for pi, p := range f.params {
+		if p.IsControl() || p.IsBlank() {
+			continue
+		}
+		which := "passed"
+		if !passed[pi] {
+			which = "captured"
+		}
+		b.WriteString("  // check parm " + which + "\n")
+		numel := p.NumElements()
+		cel := checkableElements(p)
+		for i := 0; i < numel; i++ {
+			elref, _ := p.GenElemRef(i, s.genParamRef(p, pi))
+			if elref == "" || elref == "_" || cel == 0 {
+				verb(4, "empty skip p%d el %d", pi, i)
+				continue
+			} else {
+				b.WriteString(fmt.Sprintf("  if %s != p%df%dc {\n", elref, pi, i))
+				b.WriteString(fmt.Sprintf("    %s.NoteFailureElem(%d, \"%s\", \"parm\", %d, %d, pad[0])\n", s.utilsPkg(), f.idx, s.checkerPkg(pidx), pi, i))
+				b.WriteString("    return\n")
+				b.WriteString("  }\n")
+			}
+		}
+	}
+	b.WriteString("  } (")
+	pc = 0
+	for pi, p := range f.params {
+		if p.IsControl() || p.IsBlank() {
+			continue
+		}
+		if passed[pi] {
+			if pc != 0 {
+				b.WriteString(", ")
+			}
+			b.WriteString(fmt.Sprintf("p%d", pi))
+			pc++
+		}
+	}
+	b.WriteString(")\n\n")
+
+	return value
 }
 
 func (s *genstate) emitChecker(f *funcdef, b *bytes.Buffer, pidx int) {
@@ -933,6 +1029,11 @@ func (s *genstate) emitChecker(f *funcdef, b *bytes.Buffer, pidx int) {
 	var haveControl bool
 	value, haveControl = s.emitParamChecks(f, b, pidx, value)
 
+	// defer testing
+	if s.tunables.doDefer && uint8(rand.Intn(100)) < s.tunables.deferFraction {
+		value = s.emitDeferChecks(f, b, pidx, value)
+	}
+
 	// returns
 	s.emitReturn(f, b, haveControl)
 
@@ -1004,16 +1105,16 @@ func (s *genstate) emitReturn(f *funcdef, b *bytes.Buffer, doRecursiveCall bool)
 		if indirectReturn {
 			for ri := range f.returns {
 				writeCom(b, ri)
-				b.WriteString(fmt.Sprintf("rct%d", ri))
+				b.WriteString(fmt.Sprintf("  rct%d", ri))
 			}
 			b.WriteString(" := ")
 			b.WriteString(rcall)
 			b.WriteString("\n")
 		} else {
 			if len(f.returns) == 0 {
-				b.WriteString(fmt.Sprintf("  %s\n  return\n", rcall))
+				b.WriteString(fmt.Sprintf("%s\n  return\n", rcall))
 			} else {
-				b.WriteString(fmt.Sprintf("return %s\n", rcall))
+				b.WriteString(fmt.Sprintf("  return %s\n", rcall))
 			}
 			return
 		}

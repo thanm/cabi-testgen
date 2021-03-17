@@ -10,6 +10,8 @@ ITER=${HOWMANY}
 go build .
 SEED=`seconds.py`
 HERE=`pwd`
+PRAG="-pragma registerparams"
+PRAG=""
 while [ $ITER !=  0 ]; do
   echo iter $ITER
   ITER=`expr $ITER - 1`
@@ -25,9 +27,9 @@ while [ $ITER !=  0 ]; do
   fi
   cd $D
   rm -f cabiTest
-  go build .
+  go build -p 1 . 1> build.err.txt 2>&1
   if [ $? != 0 ]; then
-     echo "*** building generated code failed, SEED=$SEED"
+     echo "*** building generated code failed, SEED=$SEED see build.err.txt"
      exit 1
   fi
   ./cabiTest
