@@ -10,15 +10,15 @@ ITER=${HOWMANY}
 go build .
 SEED=`seconds.py`
 HERE=`pwd`
-PRAG="-pragma registerparams"
 PRAG=""
+PRAG="-pragma registerparams"
 while [ $ITER !=  0 ]; do
   echo iter $ITER
   ITER=`expr $ITER - 1`
   echo "Iter $ITER"
   D=/tmp/cabiTest
   rm -rf $D
-  CMD="./cabi-testgen -q 20 -n 20 -s $SEED -o $D -p cabiTest"
+  CMD="./cabi-testgen -q 20 -n 20 -s $SEED -o $D -p cabiTest $PRAG"
   echo $CMD
   $CMD
   if [ $? != 0 ]; then

@@ -91,3 +91,104 @@ func TestIsBuildable(t *testing.T) {
 	}
 	verb(1, "output is: %s\n", string(coutput))
 }
+
+func TestExhaustive(t *testing.T) {
+
+	td, err := ioutil.TempDir("", "cabi-testgen")
+	if err != nil {
+		t.Errorf("can't create temp dir")
+	}
+	defer os.RemoveAll(td)
+	//println("=-= td is ", td)
+
+	verb(1, "generating into temp dir %s", td)
+
+	scenarios := []struct {
+		name     string
+		adjuster func()
+	}{
+		{
+			"minimal",
+			func() {
+				tunables.nParmRange = 3
+				tunables.nReturnRange = 3
+				tunables.structDepth = 1
+				tunables.recurPerc = 0
+				tunables.methodPerc = 0
+				tunables.doReflectCall = false
+				tunables.doDefer = false
+				tunables.takeAddress = false
+				checkTunables(tunables)
+			},
+		},
+		{
+			"moreparms",
+			func() {
+				tunables.nParmRange = 15
+				tunables.nReturnRange = 7
+				tunables.structDepth = 3
+				checkTunables(tunables)
+			},
+		},
+		{
+			"addrecur",
+			func() {
+				tunables.recurPerc = 20
+				checkTunables(tunables)
+			},
+		},
+		{
+			"addmethod",
+			func() {
+				tunables.methodPerc = 25
+				checkTunables(tunables)
+			},
+		},
+		{
+			"addtakeaddr",
+			func() {
+				tunables.takeAddress = true
+				tunables.takenFraction = 20
+				checkTunables(tunables)
+			},
+		},
+		{
+			"addreflect",
+			func() {
+				tunables.doReflectCall = true
+				checkTunables(tunables)
+			},
+		},
+		{
+			"adddefer",
+			func() {
+				tunables.doDefer = true
+				tunables.deferFraction = 30
+				checkTunables(tunables)
+			},
+		},
+	}
+
+	// Loop over scenarios and make sure each one works properly.
+	for i, s := range scenarios {
+		s.adjuster()
+		rand.Seed(int64(i + 9))
+		os.RemoveAll(td)
+		pack := filepath.Base(td)
+		fcnmask := make(map[int]int)
+		errs := Generate("x", td, pack, 10, 10, int64(0), "", fcnmask)
+		if errs != 0 {
+			t.Errorf("%d errors during scenarios %q Generate", errs, s.name)
+		}
+
+		verb(1, "building %s\n", td)
+
+		cmd := exec.Command("go", "run", ".")
+		cmd.Dir = td
+		coutput, cerr := cmd.CombinedOutput()
+		if cerr != nil {
+			t.Errorf("run failed for scenario %q:  %s\n", s.name, string(coutput))
+		}
+		verb(1, "output is: %s\n", string(coutput))
+	}
+}
