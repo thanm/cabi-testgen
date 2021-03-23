@@ -19,7 +19,7 @@ while [ $ITER !=  0 ]; do
   ITER=`expr $ITER - 1`
   echo "Iter $ITER"
   D=/tmp/cabiTest
-  rm -rf $D
+  rm -rf $D ${D}.orig ${D}.pkg
   CMD="./cabi-testgen -q $NP -n $NF -s $SEED -o $D -p cabiTest $PRAG"
   echo $CMD
   $CMD
@@ -31,7 +31,7 @@ while [ $ITER !=  0 ]; do
   BADF=unset
   cd $D
   rm -f cabiTest
-  go build -gcflags="-c=1" -p 1 . 1> build.err.txt 2>&1
+  go build -gcflags="-c=1" -p 1 . 1> ${HERE}/build.err.txt 2>&1
   if [ $? != 0 ]; then
      echo "*** building generated code failed, SEED=$SEED see build.err.txt"
      echo "*** now trying to minimize by package"
