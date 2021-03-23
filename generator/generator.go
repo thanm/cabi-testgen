@@ -891,9 +891,7 @@ func (s *genstate) emitDeferChecks(f *funcdef, b *bytes.Buffer, pidx int, value 
 			continue
 		}
 		if passed[pi] {
-			if pc != 0 {
-				b.WriteString(", ")
-			}
+			writeCom(b, pc)
 			n := fmt.Sprintf("p%d", pi)
 			p.Declare(b, n, "", false)
 			pc++
@@ -932,9 +930,7 @@ func (s *genstate) emitDeferChecks(f *funcdef, b *bytes.Buffer, pidx int, value 
 			continue
 		}
 		if passed[pi] {
-			if pc != 0 {
-				b.WriteString(", ")
-			}
+			writeCom(b, pc)
 			b.WriteString(fmt.Sprintf("p%d", pi))
 			pc++
 		}
@@ -1187,6 +1183,7 @@ func emitUtils(outf *os.File) {
 	fmt.Fprintf(outf, "import \"fmt\"\n")
 	fmt.Fprintf(outf, "import \"os\"\n\n")
 	fmt.Fprintf(outf, "var FailCount int\n\n")
+	fmt.Fprintf(outf, "type UtilsType int\n\n")
 	fmt.Fprintf(outf, "//go:noinline\n")
 	fmt.Fprintf(outf, "func NoteFailure(fidx int, pkg string, pref string, parmNo int, _ uint64) {\n")
 	fmt.Fprintf(outf, "  FailCount += 1\n")
@@ -1207,7 +1204,7 @@ func emitUtils(outf *os.File) {
 	fmt.Fprintf(outf, "}\n\n")
 }
 
-func (s *genstate) emitMain(outf *os.File, numit int) {
+func (s *genstate) emitMain(outf *os.File, numit int, fcnmask map[int]int, pkmask map[int]int) {
 	fmt.Fprintf(outf, "import \"fmt\"\n")
 	fmt.Fprintf(outf, "import \"os\"\n\n")
 	fmt.Fprintf(outf, "func main() {\n")
@@ -1215,7 +1212,9 @@ func (s *genstate) emitMain(outf *os.File, numit int) {
 	for k := 0; k < s.numtpk; k++ {
 		cp := fmt.Sprintf("%sCaller%d", s.tag, k)
 		for i := 0; i < numit; i++ {
-			fmt.Fprintf(outf, "  %s.Caller%d()\n", cp, i)
+			if emitFP(i, k, fcnmask, pkmask) {
+				fmt.Fprintf(outf, "  %s.Caller%d()\n", cp, i)
+			}
 		}
 	}
 	fmt.Fprintf(outf, "  if %s.FailCount != 0 {\n", s.utilsPkg())
@@ -1253,7 +1252,27 @@ func (s *genstate) utilsPkg() string {
 	return s.tag + "Utils"
 }
 
-func Generate(tag string, outdir string, pkgpath string, numit int, numtpkgs int, seed int64, pragma string, fcnmask map[int]int) int {
+func emitFP(fn int, pk int, fcnmask map[int]int, pkmask map[int]int) bool {
+	emitpk := true
+	emitfn := true
+	if len(pkmask) != 0 {
+		emitpk = false
+		if _, ok := pkmask[pk]; ok {
+			emitpk = true
+		}
+	}
+	if len(fcnmask) != 0 {
+		emitfn = false
+		if _, ok := fcnmask[fn]; ok {
+			emitfn = true
+		}
+	}
+	doemit := emitpk && emitfn
+	verb(2, "emitFP(F=%d,P=%d) returns %v", fn, pk, doemit)
+	return doemit
+}
+
+func Generate(tag string, outdir string, pkgpath string, numit int, numtpkgs int, seed int64, pragma string, fcnmask map[int]int, pkmask map[int]int, utilsinl bool) int {
 	mainpkg := tag + "Main"
 
 	var ipref string
@@ -1279,7 +1298,9 @@ func Generate(tag string, outdir string, pkgpath string, numit int, numtpkgs int
 		makeDir(outdir + "/" + s.callerPkg(i))
 		makeDir(outdir + "/" + s.checkerPkg(i))
 		makeDir(outdir + "/" + s.utilsPkg())
-		mainimports = append(mainimports, s.callerPkg(i))
+		if emitFP(-1, i, nil, pkmask) {
+			mainimports = append(mainimports, s.callerPkg(i))
+		}
 	}
 	mainimports = append(mainimports, s.utilsPkg())
 
@@ -1311,19 +1332,19 @@ func Generate(tag string, outdir string, pkgpath string, numit int, numtpkgs int
 
 		var b bytes.Buffer
 		for i := 0; i < numit; i++ {
-			doemit := false
-			if len(fcnmask) == 0 {
-				doemit = true
-			} else if _, ok := fcnmask[i]; ok {
-				doemit = true
-			}
+			doemit := emitFP(i, k, fcnmask, pkmask)
 			seed = s.GenPair(calleroutfile, checkeroutfile, i, k,
 				&b, seed, doemit)
 		}
+
+		// When minimization is in effect, we sometimes wind up eliminating
+		// all refs to the utils package. Add a dummy to help with this.
+		fmt.Fprintf(calleroutfile, "\n// dummy\nvar Dummy %s.UtilsType\n", s.utilsPkg())
+		fmt.Fprintf(checkeroutfile, "\n// dummy\nvar Dummy %s.UtilsType\n", s.utilsPkg())
 		calleroutfile.Close()
 		checkeroutfile.Close()
 	}
-	s.emitMain(mainoutfile, numit)
+	s.emitMain(mainoutfile, numit, fcnmask, pkmask)
 
 	// emit go.mod
 	verb(1, "opening go.mod")

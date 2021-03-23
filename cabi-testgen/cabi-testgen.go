@@ -23,7 +23,8 @@ var tagflag = flag.String("t", "gen", "Prefix name of go files/pkgs to generate"
 var outdirflag = flag.String("o", "", "Output directory for generated files")
 var pkgpathflag = flag.String("p", "gen", "Base package path for generated files")
 var numtpkflag = flag.Int("q", 1, "Number of test packages")
-var maskflag = flag.String("M", "", "Mask containing list of fcn numbers to emit")
+var fcnmaskflag = flag.String("M", "", "Mask containing list of fcn numbers to emit")
+var pkmaskflag = flag.String("P", "", "Mask containing list of pkg numbers to emit")
 
 var reflectflag = flag.Bool("reflect", true, "Include testing of reflect.Call.")
 var deferflag = flag.Bool("defer", true, "Include testing of defer stmts.")
@@ -33,6 +34,9 @@ var methodflag = flag.Bool("method", true, "Include testing of method calls.")
 var inlimitflag = flag.Int("inmax", -1, "Max number of input params.")
 var outlimitflag = flag.Int("outmax", -1, "Max number of input params.")
 var pragmaflag = flag.String("pragma", "", "Tag generated test routines with pragma //go:<value>.")
+
+// for testcase minimization
+var utilsinlineflag = flag.Bool("inlutils", false, "Emit inline utils code (for minimization)")
 
 func verb(vlevel int, s string, a ...interface{}) {
 	if *verbflag >= vlevel {
@@ -97,21 +101,46 @@ func main() {
 	}
 	verb(1, "tag is %s", *tagflag)
 
-	fcnmask := make(map[int]int)
-	if *maskflag != "" {
-		verb(1, "mask is %s", *maskflag)
-		ss := strings.Split(*maskflag, ":")
+	mkmask := func(arg string, tag string) map[int]int {
+		if arg == "" {
+			return nil
+		}
+		verb(1, "%s mask is %s", tag, arg)
+		m := make(map[int]int)
+		ss := strings.Split(arg, ":")
 		for _, s := range ss {
-			if i, err := strconv.Atoi(s); err == nil {
-				fcnmask[i] = 1
+			if strings.Contains(s, "-") {
+				rng := strings.Split(s, "-")
+				if len(rng) != 2 {
+					verb(0, "malformed range %s in %s mask, ignoring", s, tag)
+					continue
+				}
+				if i, err := strconv.Atoi(rng[0]); err == nil {
+					if j, err := strconv.Atoi(rng[1]); err == nil {
+						for k := i; k < j; k++ {
+							m[k] = 1
+						}
+					}
+				}
+			} else {
+				if i, err := strconv.Atoi(s); err == nil {
+					m[i] = 1
+				}
 			}
 		}
+		return m
 	}
+	fcnmask := mkmask(*fcnmaskflag, "fcn")
+	pkmask := mkmask(*pkmaskflag, "pkg")
+
+	verb(2, "pkg mask is %v", pkmask)
+	verb(2, "fn mask is %v", fcnmask)
 
 	verb(1, "starting generation")
 	setupTunables()
 	errs := generator.Generate(*tagflag, *outdirflag, *pkgpathflag,
-		*numitflag, *numtpkflag, *seedflag, *pragmaflag, fcnmask)
+		*numitflag, *numtpkflag, *seedflag, *pragmaflag,
+		fcnmask, pkmask, *utilsinlineflag)
 	if errs != 0 {
 		log.Fatal("errors during generation")
 	}
