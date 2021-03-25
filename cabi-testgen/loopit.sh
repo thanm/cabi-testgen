@@ -2,6 +2,8 @@
 #
 # Simple test script for performing a series of test runs.
 #
+echo export GOEXPERIMENT=regabi
+export GOEXPERIMENT=regabi
 HOWMANY=$1
 if [ -z "$HOWMANY" ]; then
   HOWMANY=1
@@ -11,7 +13,7 @@ go build .
 SEED=`seconds.py`
 HERE=`pwd`
 PRAG=""
-PRAG="-pragma registerparams -method=0"
+PRAG="-pragma registerparams -method=0 -reflect=0"
 NP=20
 NF=20
 while [ $ITER !=  0 ]; do
@@ -105,10 +107,37 @@ while [ $ITER !=  0 ]; do
      fi
      exit 1
   fi
-  ./cabiTest
+  ./cabiTest 1> ${HERE}/run.err.txt 2>&1
   if [ $? != 0 ]; then
-     echo "*** running generated code failed, SEED=$SEED"
-     exit 1
+    cd $HERE
+    head run.err.txt
+    PIPE="|"
+    echo "*** running generated code failed, SEED=$SEED"
+    # Minimize base on first error.
+    PK=`cat run.err.txt | fgrep 'Error: fail' | head -1 | cut -f2 -d${PIPE}`
+    FN=`cat run.err.txt | fgrep 'Error: fail' | head -1 | cut -f3 -d${PIPE}`
+    echo PK=$PK FN=$FN
+    if [ "$PK" != "" -a $PK -ge 0 -a $PK -lt $NP ]; then
+      if [ "$FN" != "" -a $FN -ge 0 -a $FN -lt $NF ]; then
+        CMD="./cabi-testgen -q $NP -n $NF -s $SEED -o $D -p cabiTest $PRAG -P $PK -M $FN"
+        $CMD
+        if [ $? != 0 ]; then
+          echo "*** minimization run failed"
+          exit 2
+        fi
+        # Clean unused packages
+        P=0
+        while [ $P != $NP ]; do
+          if [ $P != $PK ]; then
+            echo "... cleaning unused $P"
+            rm -rf $D/genChecker$P $D/genCaller$P
+          fi
+          P=`expr $P + 1`
+        done
+        echo "minimization complete"
+      fi
+    fi
+    exit 1
   fi
   cd $HERE
   SEED=`expr $SEED + 17`

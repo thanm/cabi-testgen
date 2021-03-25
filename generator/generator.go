@@ -569,6 +569,8 @@ func (s *genstate) emitCaller(f *funcdef, b *bytes.Buffer, pidx int) {
 		f.values = append(f.values, value)
 	}
 
+	b.WriteString(fmt.Sprintf("  %s.Mode = \"\"\n", s.utilsPkg()))
+
 	// calling code
 	b.WriteString(fmt.Sprintf("  // %d returns %d params\n",
 		len(f.returns), len(f.params)))
@@ -594,13 +596,14 @@ func (s *genstate) emitCaller(f *funcdef, b *bytes.Buffer, pidx int) {
 	// checking values returned
 	for ri := range f.returns {
 		b.WriteString(fmt.Sprintf("  if r%d != c%d {\n", ri, ri))
-		b.WriteString(fmt.Sprintf("    %s.NoteFailure(%d, \"%s\", \"return\", %d, uint64(0))\n", s.utilsPkg(), f.idx, s.checkerPkg(pidx), ri))
+		b.WriteString(fmt.Sprintf("    %s.NoteFailure(%d, %d, \"%s\", \"return\", %d, uint64(0))\n", s.utilsPkg(), pidx, f.idx, s.checkerPkg(pidx), ri))
 		b.WriteString("  }\n")
 	}
 
 	if s.tunables.doReflectCall {
 		// now make the same call via reflection
 		b.WriteString("  // same call via reflection\n")
+		b.WriteString(fmt.Sprintf("  %s.Mode = \"reflect\"\n", s.utilsPkg()))
 		if f.method {
 			b.WriteString("  rcv := reflect.ValueOf(rcvr)\n")
 			b.WriteString(fmt.Sprintf("  rc := rcv.MethodByName(\"Test%d\")\n", f.idx))
@@ -626,7 +629,7 @@ func (s *genstate) emitCaller(f *funcdef, b *bytes.Buffer, pidx int) {
 			r.Declare(b, "", "", true)
 			b.WriteString(")\n")
 			b.WriteString(fmt.Sprintf("  if rr%dv != c%d {\n", ri, ri))
-			b.WriteString(fmt.Sprintf("    %s.NoteFailure(%d, \"%s\", \"reflect return\", %d, uint64(0))\n", s.utilsPkg(), f.idx, s.checkerPkg(pidx), ri))
+			b.WriteString(fmt.Sprintf("    %s.NoteFailure(%d, %d, \"%s\", \"return\", %d, uint64(0))\n", s.utilsPkg(), pidx, f.idx, s.checkerPkg(pidx), ri))
 			b.WriteString("  }\n")
 		}
 	}
@@ -820,7 +823,7 @@ func (s *genstate) emitParamChecks(f *funcdef, b *bytes.Buffer, pidx int, value 
 				} else {
 					b.WriteString(fmt.Sprintf("  p%df%dc := %s\n", pi, i, valstr))
 					b.WriteString(fmt.Sprintf("  if %s != p%df%dc {\n", elref, pi, i))
-					b.WriteString(fmt.Sprintf("    %s.NoteFailureElem(%d, \"%s\", \"parm\", %d, %d, pad[0])\n", s.utilsPkg(), f.idx, s.checkerPkg(pidx), pi, i))
+					b.WriteString(fmt.Sprintf("    %s.NoteFailureElem(%d, %d, \"%s\", \"parm\", %d, %d, pad[0])\n", s.utilsPkg(), pidx, f.idx, s.checkerPkg(pidx), pi, i))
 					b.WriteString("    return\n")
 					b.WriteString("  }\n")
 				}
@@ -852,7 +855,7 @@ func (s *genstate) emitParamChecks(f *funcdef, b *bytes.Buffer, pidx int, value 
 			} else {
 				b.WriteString(fmt.Sprintf("  rcvrf%dc := %s\n", i, valstr))
 				b.WriteString(fmt.Sprintf("  if %s != rcvrf%dc {\n", elref, i))
-				b.WriteString(fmt.Sprintf("    %s.NoteFailureElem(%d, \"%s\", \"rcvr\", %d, -1, pad[0])\n", s.utilsPkg(), f.idx, s.checkerPkg(pidx), i))
+				b.WriteString(fmt.Sprintf("    %s.NoteFailureElem(%d, %d, \"%s\", \"rcvr\", %d, -1, pad[0])\n", s.utilsPkg(), pidx, f.idx, s.checkerPkg(pidx), i))
 				b.WriteString("    return\n")
 				b.WriteString("  }\n")
 			}
@@ -917,7 +920,7 @@ func (s *genstate) emitDeferChecks(f *funcdef, b *bytes.Buffer, pidx int, value 
 				continue
 			} else {
 				b.WriteString(fmt.Sprintf("  if %s != p%df%dc {\n", elref, pi, i))
-				b.WriteString(fmt.Sprintf("    %s.NoteFailureElem(%d, \"%s\", \"parm\", %d, %d, pad[0])\n", s.utilsPkg(), f.idx, s.checkerPkg(pidx), pi, i))
+				b.WriteString(fmt.Sprintf("    %s.NoteFailureElem(%d, %d, \"%s\", \"parm\", %d, %d, pad[0])\n", s.utilsPkg(), pidx, f.idx, s.checkerPkg(pidx), pi, i))
 				b.WriteString("    return\n")
 				b.WriteString("  }\n")
 			}
@@ -1183,21 +1186,22 @@ func emitUtils(outf *os.File) {
 	fmt.Fprintf(outf, "import \"fmt\"\n")
 	fmt.Fprintf(outf, "import \"os\"\n\n")
 	fmt.Fprintf(outf, "var FailCount int\n\n")
+	fmt.Fprintf(outf, "var Mode string\n\n")
 	fmt.Fprintf(outf, "type UtilsType int\n\n")
 	fmt.Fprintf(outf, "//go:noinline\n")
-	fmt.Fprintf(outf, "func NoteFailure(fidx int, pkg string, pref string, parmNo int, _ uint64) {\n")
+	fmt.Fprintf(outf, "func NoteFailure(fidx int, pidx int, pkg string, pref string, parmNo int, _ uint64) {\n")
 	fmt.Fprintf(outf, "  FailCount += 1\n")
 	fmt.Fprintf(outf, "  fmt.Fprintf(os.Stderr, ")
-	fmt.Fprintf(outf, "\"Error: fail on =%%s.Test%%d= %%s %%d\\n\", pkg, fidx, pref, parmNo)\n")
+	fmt.Fprintf(outf, "\"Error: fail %%s |%%d|%%d| =%%s.Test%%d= %%s %%d\\n\", Mode, pidx, fidx, pkg, fidx, pref, parmNo)\n")
 	fmt.Fprintf(outf, "  if (FailCount > 10) {\n")
 	fmt.Fprintf(outf, "    os.Exit(1)\n")
 	fmt.Fprintf(outf, "  }\n")
 	fmt.Fprintf(outf, "}\n\n")
 	fmt.Fprintf(outf, "//go:noinline\n")
-	fmt.Fprintf(outf, "func NoteFailureElem(fidx int, pkg string, pref string, parmNo int, elem int, _ uint64) {\n")
+	fmt.Fprintf(outf, "func NoteFailureElem(pidx int, fidx int, pkg string, pref string, parmNo int, elem int, _ uint64) {\n")
 	fmt.Fprintf(outf, "  FailCount += 1\n")
 	fmt.Fprintf(outf, "  fmt.Fprintf(os.Stderr, ")
-	fmt.Fprintf(outf, "\"Error: fail on =%%s.Test%%d= %%s %%d elem %%d\\n\", pkg, fidx, pref, parmNo, elem)\n")
+	fmt.Fprintf(outf, "\"Error: fail %%s |%%d|%%d| =%%s.Test%%d= %%s %%d elem %%d\\n\", Mode, pidx, fidx, pkg, fidx, pref, parmNo, elem)\n")
 	fmt.Fprintf(outf, "  if (FailCount > 10) {\n")
 	fmt.Fprintf(outf, "    os.Exit(1)\n")
 	fmt.Fprintf(outf, "  }\n")
