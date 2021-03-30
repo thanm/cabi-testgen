@@ -995,7 +995,7 @@ func (s *genstate) emitChecker(f *funcdef, b *bytes.Buffer, pidx int) {
 	// local storage
 	b.WriteString("  // consume some stack space, so as to trigger morestack\n")
 	b.WriteString("  var pad [256]uint64\n")
-	b.WriteString(fmt.Sprintf("  pad[%s.FailCount]++\n", s.utilsPkg()))
+	b.WriteString(fmt.Sprintf("  pad[%s.FailCount&0x1f]++\n", s.utilsPkg()))
 
 	// generate return constants
 	value := 1
@@ -1182,7 +1182,7 @@ func openOutputFile(filename string, pk string, imports []string, ipref string) 
 	return outf
 }
 
-func emitUtils(outf *os.File) {
+func emitUtils(outf *os.File, maxfail int) {
 	fmt.Fprintf(outf, "import \"fmt\"\n")
 	fmt.Fprintf(outf, "import \"os\"\n\n")
 	fmt.Fprintf(outf, "var FailCount int\n\n")
@@ -1193,7 +1193,7 @@ func emitUtils(outf *os.File) {
 	fmt.Fprintf(outf, "  FailCount += 1\n")
 	fmt.Fprintf(outf, "  fmt.Fprintf(os.Stderr, ")
 	fmt.Fprintf(outf, "\"Error: fail %%s |%%d|%%d| =%%s.Test%%d= %%s %%d\\n\", Mode, pidx, fidx, pkg, fidx, pref, parmNo)\n")
-	fmt.Fprintf(outf, "  if (FailCount > 10) {\n")
+	fmt.Fprintf(outf, "  if (FailCount > %d) {\n", maxfail)
 	fmt.Fprintf(outf, "    os.Exit(1)\n")
 	fmt.Fprintf(outf, "  }\n")
 	fmt.Fprintf(outf, "}\n\n")
@@ -1202,7 +1202,7 @@ func emitUtils(outf *os.File) {
 	fmt.Fprintf(outf, "  FailCount += 1\n")
 	fmt.Fprintf(outf, "  fmt.Fprintf(os.Stderr, ")
 	fmt.Fprintf(outf, "\"Error: fail %%s |%%d|%%d| =%%s.Test%%d= %%s %%d elem %%d\\n\", Mode, pidx, fidx, pkg, fidx, pref, parmNo, elem)\n")
-	fmt.Fprintf(outf, "  if (FailCount > 10) {\n")
+	fmt.Fprintf(outf, "  if (FailCount > %d) {\n", maxfail)
 	fmt.Fprintf(outf, "    os.Exit(1)\n")
 	fmt.Fprintf(outf, "  }\n")
 	fmt.Fprintf(outf, "}\n\n")
@@ -1276,7 +1276,7 @@ func emitFP(fn int, pk int, fcnmask map[int]int, pkmask map[int]int) bool {
 	return doemit
 }
 
-func Generate(tag string, outdir string, pkgpath string, numit int, numtpkgs int, seed int64, pragma string, fcnmask map[int]int, pkmask map[int]int, utilsinl bool) int {
+func Generate(tag string, outdir string, pkgpath string, numit int, numtpkgs int, seed int64, pragma string, fcnmask map[int]int, pkmask map[int]int, utilsinl bool, maxfail int) int {
 	mainpkg := tag + "Main"
 
 	var ipref string
@@ -1311,7 +1311,7 @@ func Generate(tag string, outdir string, pkgpath string, numit int, numtpkgs int
 	utilsfile := outdir + "/" + s.utilsPkg() + "/" + s.utilsPkg() + ".go"
 	utilsoutfile := openOutputFile(utilsfile, s.utilsPkg(), []string{}, "")
 	verb(1, "emit utils")
-	emitUtils(utilsoutfile)
+	emitUtils(utilsoutfile, maxfail)
 	utilsoutfile.Close()
 
 	mainfile := outdir + "/" + mainpkg + ".go"

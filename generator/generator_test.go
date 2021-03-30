@@ -75,7 +75,7 @@ func TestIsBuildable(t *testing.T) {
 	rand.Seed(1)
 	checkTunables(tunables)
 	pack := filepath.Base(td)
-	errs := Generate("x", td, pack, 10, 10, int64(0), "", nil, nil, false)
+	errs := Generate("x", td, pack, 10, 10, int64(0), "", nil, nil, false, 10)
 	if errs != 0 {
 		t.Errorf("%d errors during Generate", errs)
 	}
@@ -174,7 +174,7 @@ func TestExhaustive(t *testing.T) {
 		rand.Seed(int64(i + 9))
 		os.RemoveAll(td)
 		pack := filepath.Base(td)
-		errs := Generate("x", td, pack, 10, 10, int64(0), "", nil, nil, false)
+		errs := Generate("x", td, pack, 10, 10, int64(0), "", nil, nil, false, 10)
 		if errs != 0 {
 			t.Errorf("%d errors during scenarios %q Generate", errs, s.name)
 		}
