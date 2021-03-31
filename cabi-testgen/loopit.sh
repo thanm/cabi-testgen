@@ -2,8 +2,8 @@
 #
 # Simple test script for performing a series of test runs.
 #
-#DOMINIMIZE=yes
-DOMINIMIZE=no
+DOMINIMIZE=yes
+#DOMINIMIZE=no
 echo export GOEXPERIMENT=regabi
 export GOEXPERIMENT=regabi
 HOWMANY=$1
@@ -25,7 +25,7 @@ function cleanUnused() {
     fi
     P=`expr $P + 1`
   done
-  echo -n "... cleaning unused: $CLEANED"
+  echo "... cleaning unused: $CLEANED"
 }
 SEED=`seconds.py`
 HERE=`pwd`
@@ -129,10 +129,21 @@ while [ $ITER !=  0 ]; do
     if [ $DOMINIMIZE != "yes" ]; then
       exit 1
     fi
-    # Minimize base on first error.
-    PK=`cat run.err.txt | fgrep 'Error: fail' | head -1 | cut -f2 -d${PIPE}`
-    FN=`cat run.err.txt | fgrep 'Error: fail' | head -1 | cut -f3 -d${PIPE}`
-    echo PK=$PK FN=$FN
+    # Minimize based on error in least-complex function.
+    FAILURES=`cat run.err.txt | fgrep 'Error: fail' | cut -f2-4 -d${PIPE}`
+    CM=99999999999
+    PK="unset"
+    FN="unset"
+    for FR in $FAILURES
+    do
+      C=`echo $FR | cut -f1  -d${PIPE}`
+      if [ $C -lt $CM ]; then
+        PK=`echo $FR | cut -f2 -d${PIPE}`
+        FN=`echo $FR | cut -f3 -d${PIPE}`
+        CM=$C
+      fi
+    done
+    echo PK=$PK FN=$FN CM=$CM
     if [ "$PK" != "" -a $PK -ge 0 -a $PK -lt $NP ]; then
       if [ "$FN" != "" -a $FN -ge 0 -a $FN -lt $NF ]; then
         CMD="./cabi-testgen -q $NP -n $NF -s $SEED -o $D -p cabiTest $PRAG -P $PK -M $FN"

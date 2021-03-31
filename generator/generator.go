@@ -596,9 +596,10 @@ func (s *genstate) emitCaller(f *funcdef, b *bytes.Buffer, pidx int) {
 	b.WriteString(")\n")
 
 	// checking values returned
+	cm := f.complexityMeasure()
 	for ri := range f.returns {
 		b.WriteString(fmt.Sprintf("  if r%d != c%d {\n", ri, ri))
-		b.WriteString(fmt.Sprintf("    %s.NoteFailure(%d, %d, \"%s\", \"return\", %d, true, uint64(0))\n", s.utilsPkg(), pidx, f.idx, s.checkerPkg(pidx), ri))
+		b.WriteString(fmt.Sprintf("    %s.NoteFailure(%d, %d, %d, \"%s\", \"return\", %d, true, uint64(0))\n", s.utilsPkg(), cm, pidx, f.idx, s.checkerPkg(pidx), ri))
 		b.WriteString("  }\n")
 	}
 
@@ -631,7 +632,7 @@ func (s *genstate) emitCaller(f *funcdef, b *bytes.Buffer, pidx int) {
 			r.Declare(b, "", "", true)
 			b.WriteString(")\n")
 			b.WriteString(fmt.Sprintf("  if rr%dv != c%d {\n", ri, ri))
-			b.WriteString(fmt.Sprintf("    %s.NoteFailure(%d, %d, \"%s\", \"return\", %d, true, uint64(0))\n", s.utilsPkg(), pidx, f.idx, s.checkerPkg(pidx), ri))
+			b.WriteString(fmt.Sprintf("    %s.NoteFailure(%d, %d, %d, \"%s\", \"return\", %d, true, uint64(0))\n", s.utilsPkg(), cm, pidx, f.idx, s.checkerPkg(pidx), ri))
 			b.WriteString("  }\n")
 		}
 	}
@@ -796,6 +797,7 @@ func (s *genstate) genReturnAssign(b *bytes.Buffer, r parm, idx int, val string)
 func (s *genstate) emitParamChecks(f *funcdef, b *bytes.Buffer, pidx int, value int) (int, bool) {
 	haveControl := false
 	dangling := []int{}
+	cm := f.complexityMeasure()
 	for pi, p := range f.params {
 		verb(4, "emitting parmcheck p%d numel=%d pt=%s value=%d",
 			pi, p.NumElements(), p.TypeName(), value)
@@ -827,7 +829,7 @@ func (s *genstate) emitParamChecks(f *funcdef, b *bytes.Buffer, pidx int, value 
 				} else {
 					b.WriteString(fmt.Sprintf("  p%df%dc := %s\n", pi, i, valstr))
 					b.WriteString(fmt.Sprintf("  if %s != p%df%dc {\n", elref, pi, i))
-					b.WriteString(fmt.Sprintf("    %s.NoteFailureElem(%d, %d, \"%s\", \"parm\", %d, %d, false, pad[0])\n", s.utilsPkg(), pidx, f.idx, s.checkerPkg(pidx), pi, i))
+					b.WriteString(fmt.Sprintf("    %s.NoteFailureElem(%d, %d, %d, \"%s\", \"parm\", %d, %d, false, pad[0])\n", s.utilsPkg(), cm, pidx, f.idx, s.checkerPkg(pidx), pi, i))
 					b.WriteString("    return\n")
 					b.WriteString("  }\n")
 				}
@@ -859,7 +861,7 @@ func (s *genstate) emitParamChecks(f *funcdef, b *bytes.Buffer, pidx int, value 
 			} else {
 				b.WriteString(fmt.Sprintf("  rcvrf%dc := %s\n", i, valstr))
 				b.WriteString(fmt.Sprintf("  if %s != rcvrf%dc {\n", elref, i))
-				b.WriteString(fmt.Sprintf("    %s.NoteFailureElem(%d, %d, \"%s\", \"rcvr\", %d, -1, false, pad[0])\n", s.utilsPkg(), pidx, f.idx, s.checkerPkg(pidx), i))
+				b.WriteString(fmt.Sprintf("    %s.NoteFailureElem(%d, %d, %d, \"%s\", \"rcvr\", %d, -1, false, pad[0])\n", s.utilsPkg(), cm, pidx, f.idx, s.checkerPkg(pidx), i))
 				b.WriteString("    return\n")
 				b.WriteString("  }\n")
 			}
@@ -906,6 +908,7 @@ func (s *genstate) emitDeferChecks(f *funcdef, b *bytes.Buffer, pidx int, value 
 	}
 	b.WriteString(") {\n")
 
+	cm := f.complexityMeasure()
 	for pi, p := range f.params {
 		if p.IsControl() || p.IsBlank() {
 			continue
@@ -924,7 +927,7 @@ func (s *genstate) emitDeferChecks(f *funcdef, b *bytes.Buffer, pidx int, value 
 				continue
 			} else {
 				b.WriteString(fmt.Sprintf("  if %s != p%df%dc {\n", elref, pi, i))
-				b.WriteString(fmt.Sprintf("    %s.NoteFailureElem(%d, %d, \"%s\", \"parm\", %d, %d, false, pad[0])\n", s.utilsPkg(), pidx, f.idx, s.checkerPkg(pidx), pi, i))
+				b.WriteString(fmt.Sprintf("    %s.NoteFailureElem(%d, %d, %d, \"%s\", \"parm\", %d, %d, false, pad[0])\n", s.utilsPkg(), cm, pidx, f.idx, s.checkerPkg(pidx), pi, i))
 				b.WriteString("    return\n")
 				b.WriteString("  }\n")
 			}
@@ -1047,6 +1050,23 @@ func (s *genstate) emitChecker(f *funcdef, b *bytes.Buffer, pidx int) {
 
 	// emit any new helper funcs referenced by this test function
 	s.emitAddrTakenHelpers(b)
+}
+
+// complexityMeasure returns an integer that estimates how complex a given test function
+// is relative to some other function. The more parameters + returns and the more complicated
+// the types of the params/returns, the higher the number returned here.
+func (f *funcdef) complexityMeasure() int {
+	v := int(0)
+	if f.method {
+		v += f.receiver.NumElements()
+	}
+	for _, p := range f.params {
+		v += p.NumElements()
+	}
+	for _, r := range f.returns {
+		v += r.NumElements()
+	}
+	return v
 }
 
 // emitRecursiveCall generates a recursive call to the test function in question.
@@ -1211,17 +1231,17 @@ func emitUtils(outf *os.File, maxfail int) {
 	fmt.Fprintf(outf, "var Mode string\n\n")
 	fmt.Fprintf(outf, "type UtilsType int\n\n")
 	fmt.Fprintf(outf, "//go:noinline\n")
-	fmt.Fprintf(outf, "func NoteFailure(fidx int, pidx int, pkg string, pref string, parmNo int, isret bool,_ uint64) {")
+	fmt.Fprintf(outf, "func NoteFailure(cm int, fidx int, pidx int, pkg string, pref string, parmNo int, isret bool,_ uint64) {")
 	outf.WriteString(countfail)
 	fmt.Fprintf(outf, "  fmt.Fprintf(os.Stderr, ")
-	fmt.Fprintf(outf, "\"Error: fail %%s |%%d|%%d| =%%s.Test%%d= %%s %%d\\n\", Mode, pidx, fidx, pkg, fidx, pref, parmNo)\n")
+	fmt.Fprintf(outf, "\"Error: fail %%s |%%d|%%d|%%d| =%%s.Test%%d= %%s %%d\\n\", Mode, cm, pidx, fidx, pkg, fidx, pref, parmNo)\n")
 	outf.WriteString(earlyexit)
 	fmt.Fprintf(outf, "}\n\n")
 	fmt.Fprintf(outf, "//go:noinline\n")
-	fmt.Fprintf(outf, "func NoteFailureElem(pidx int, fidx int, pkg string, pref string, parmNo int, elem int, isret bool,_ uint64) {\n")
+	fmt.Fprintf(outf, "func NoteFailureElem(cm int, pidx int, fidx int, pkg string, pref string, parmNo int, elem int, isret bool,_ uint64) {\n")
 	outf.WriteString(countfail)
 	fmt.Fprintf(outf, "  fmt.Fprintf(os.Stderr, ")
-	fmt.Fprintf(outf, "\"Error: fail %%s |%%d|%%d| =%%s.Test%%d= %%s %%d elem %%d\\n\", Mode, pidx, fidx, pkg, fidx, pref, parmNo, elem)\n")
+	fmt.Fprintf(outf, "\"Error: fail %%s |%%d|%%d|%%d| =%%s.Test%%d= %%s %%d elem %%d\\n\", Mode, cm, pidx, fidx, pkg, fidx, pref, parmNo, elem)\n")
 	outf.WriteString(earlyexit)
 	fmt.Fprintf(outf, "}\n\n")
 	fmt.Fprintf(outf, "func BeginFcn() {\n")
