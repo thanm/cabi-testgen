@@ -539,6 +539,8 @@ func (s *genstate) emitCaller(f *funcdef, b *bytes.Buffer, pidx int) {
 
 	b.WriteString(fmt.Sprintf("func Caller%d() {\n", f.idx))
 
+	b.WriteString(fmt.Sprintf("  %s.BeginFcn()\n", s.utilsPkg()))
+
 	// generate return constants
 	var value int = 1
 	for ri, r := range f.returns {
@@ -596,7 +598,7 @@ func (s *genstate) emitCaller(f *funcdef, b *bytes.Buffer, pidx int) {
 	// checking values returned
 	for ri := range f.returns {
 		b.WriteString(fmt.Sprintf("  if r%d != c%d {\n", ri, ri))
-		b.WriteString(fmt.Sprintf("    %s.NoteFailure(%d, %d, \"%s\", \"return\", %d, uint64(0))\n", s.utilsPkg(), pidx, f.idx, s.checkerPkg(pidx), ri))
+		b.WriteString(fmt.Sprintf("    %s.NoteFailure(%d, %d, \"%s\", \"return\", %d, true, uint64(0))\n", s.utilsPkg(), pidx, f.idx, s.checkerPkg(pidx), ri))
 		b.WriteString("  }\n")
 	}
 
@@ -629,10 +631,12 @@ func (s *genstate) emitCaller(f *funcdef, b *bytes.Buffer, pidx int) {
 			r.Declare(b, "", "", true)
 			b.WriteString(")\n")
 			b.WriteString(fmt.Sprintf("  if rr%dv != c%d {\n", ri, ri))
-			b.WriteString(fmt.Sprintf("    %s.NoteFailure(%d, %d, \"%s\", \"return\", %d, uint64(0))\n", s.utilsPkg(), pidx, f.idx, s.checkerPkg(pidx), ri))
+			b.WriteString(fmt.Sprintf("    %s.NoteFailure(%d, %d, \"%s\", \"return\", %d, true, uint64(0))\n", s.utilsPkg(), pidx, f.idx, s.checkerPkg(pidx), ri))
 			b.WriteString("  }\n")
 		}
 	}
+
+	b.WriteString(fmt.Sprintf("  %s.EndFcn()\n", s.utilsPkg()))
 
 	b.WriteString("}\n\n")
 }
@@ -823,7 +827,7 @@ func (s *genstate) emitParamChecks(f *funcdef, b *bytes.Buffer, pidx int, value 
 				} else {
 					b.WriteString(fmt.Sprintf("  p%df%dc := %s\n", pi, i, valstr))
 					b.WriteString(fmt.Sprintf("  if %s != p%df%dc {\n", elref, pi, i))
-					b.WriteString(fmt.Sprintf("    %s.NoteFailureElem(%d, %d, \"%s\", \"parm\", %d, %d, pad[0])\n", s.utilsPkg(), pidx, f.idx, s.checkerPkg(pidx), pi, i))
+					b.WriteString(fmt.Sprintf("    %s.NoteFailureElem(%d, %d, \"%s\", \"parm\", %d, %d, false, pad[0])\n", s.utilsPkg(), pidx, f.idx, s.checkerPkg(pidx), pi, i))
 					b.WriteString("    return\n")
 					b.WriteString("  }\n")
 				}
@@ -855,7 +859,7 @@ func (s *genstate) emitParamChecks(f *funcdef, b *bytes.Buffer, pidx int, value 
 			} else {
 				b.WriteString(fmt.Sprintf("  rcvrf%dc := %s\n", i, valstr))
 				b.WriteString(fmt.Sprintf("  if %s != rcvrf%dc {\n", elref, i))
-				b.WriteString(fmt.Sprintf("    %s.NoteFailureElem(%d, %d, \"%s\", \"rcvr\", %d, -1, pad[0])\n", s.utilsPkg(), pidx, f.idx, s.checkerPkg(pidx), i))
+				b.WriteString(fmt.Sprintf("    %s.NoteFailureElem(%d, %d, \"%s\", \"rcvr\", %d, -1, false, pad[0])\n", s.utilsPkg(), pidx, f.idx, s.checkerPkg(pidx), i))
 				b.WriteString("    return\n")
 				b.WriteString("  }\n")
 			}
@@ -920,7 +924,7 @@ func (s *genstate) emitDeferChecks(f *funcdef, b *bytes.Buffer, pidx int, value 
 				continue
 			} else {
 				b.WriteString(fmt.Sprintf("  if %s != p%df%dc {\n", elref, pi, i))
-				b.WriteString(fmt.Sprintf("    %s.NoteFailureElem(%d, %d, \"%s\", \"parm\", %d, %d, pad[0])\n", s.utilsPkg(), pidx, f.idx, s.checkerPkg(pidx), pi, i))
+				b.WriteString(fmt.Sprintf("    %s.NoteFailureElem(%d, %d, \"%s\", \"parm\", %d, %d, false, pad[0])\n", s.utilsPkg(), pidx, f.idx, s.checkerPkg(pidx), pi, i))
 				b.WriteString("    return\n")
 				b.WriteString("  }\n")
 			}
@@ -1030,7 +1034,7 @@ func (s *genstate) emitChecker(f *funcdef, b *bytes.Buffer, pidx int) {
 
 	// defer testing
 	if s.tunables.doDefer && uint8(rand.Intn(100)) < s.tunables.deferFraction {
-		value = s.emitDeferChecks(f, b, pidx, value)
+		_ = s.emitDeferChecks(f, b, pidx, value)
 	}
 
 	// returns
@@ -1183,28 +1187,50 @@ func openOutputFile(filename string, pk string, imports []string, ipref string) 
 }
 
 func emitUtils(outf *os.File, maxfail int) {
+	countfail := `
+  if isret {
+    if ParamFailCount != 0 {
+      return
+    }
+    ReturnFailCount++
+  } else {
+    ParamFailCount++
+  }
+`
+	earlyexit := fmt.Sprintf(`
+  if (ParamFailCount + FailCount + ReturnFailCount > %d) {
+    os.Exit(1)
+  }
+`, maxfail)
+
 	fmt.Fprintf(outf, "import \"fmt\"\n")
 	fmt.Fprintf(outf, "import \"os\"\n\n")
+	fmt.Fprintf(outf, "var ParamFailCount int\n\n")
+	fmt.Fprintf(outf, "var ReturnFailCount int\n\n")
 	fmt.Fprintf(outf, "var FailCount int\n\n")
 	fmt.Fprintf(outf, "var Mode string\n\n")
 	fmt.Fprintf(outf, "type UtilsType int\n\n")
 	fmt.Fprintf(outf, "//go:noinline\n")
-	fmt.Fprintf(outf, "func NoteFailure(fidx int, pidx int, pkg string, pref string, parmNo int, _ uint64) {\n")
-	fmt.Fprintf(outf, "  FailCount += 1\n")
+	fmt.Fprintf(outf, "func NoteFailure(fidx int, pidx int, pkg string, pref string, parmNo int, isret bool,_ uint64) {")
+	outf.WriteString(countfail)
 	fmt.Fprintf(outf, "  fmt.Fprintf(os.Stderr, ")
 	fmt.Fprintf(outf, "\"Error: fail %%s |%%d|%%d| =%%s.Test%%d= %%s %%d\\n\", Mode, pidx, fidx, pkg, fidx, pref, parmNo)\n")
-	fmt.Fprintf(outf, "  if (FailCount > %d) {\n", maxfail)
-	fmt.Fprintf(outf, "    os.Exit(1)\n")
-	fmt.Fprintf(outf, "  }\n")
+	outf.WriteString(earlyexit)
 	fmt.Fprintf(outf, "}\n\n")
 	fmt.Fprintf(outf, "//go:noinline\n")
-	fmt.Fprintf(outf, "func NoteFailureElem(pidx int, fidx int, pkg string, pref string, parmNo int, elem int, _ uint64) {\n")
-	fmt.Fprintf(outf, "  FailCount += 1\n")
+	fmt.Fprintf(outf, "func NoteFailureElem(pidx int, fidx int, pkg string, pref string, parmNo int, elem int, isret bool,_ uint64) {\n")
+	outf.WriteString(countfail)
 	fmt.Fprintf(outf, "  fmt.Fprintf(os.Stderr, ")
 	fmt.Fprintf(outf, "\"Error: fail %%s |%%d|%%d| =%%s.Test%%d= %%s %%d elem %%d\\n\", Mode, pidx, fidx, pkg, fidx, pref, parmNo, elem)\n")
-	fmt.Fprintf(outf, "  if (FailCount > %d) {\n", maxfail)
-	fmt.Fprintf(outf, "    os.Exit(1)\n")
-	fmt.Fprintf(outf, "  }\n")
+	outf.WriteString(earlyexit)
+	fmt.Fprintf(outf, "}\n\n")
+	fmt.Fprintf(outf, "func BeginFcn() {\n")
+	fmt.Fprintf(outf, "  ParamFailCount = 0\n")
+	fmt.Fprintf(outf, "  ReturnFailCount = 0\n")
+	fmt.Fprintf(outf, "}\n\n")
+	fmt.Fprintf(outf, "func EndFcn() {\n")
+	fmt.Fprintf(outf, "  FailCount += ParamFailCount\n")
+	fmt.Fprintf(outf, "  FailCount += ReturnFailCount\n")
 	fmt.Fprintf(outf, "}\n\n")
 }
 

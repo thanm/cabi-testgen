@@ -23,9 +23,7 @@ func (p pointerparm) Declare(b *bytes.Buffer, prefix string, suffix string, call
 }
 
 func (p pointerparm) GenElemRef(elidx int, path string) (string, parm) {
-	var rp parm
-	rp = &p
-	return path, rp
+	return path, &p
 }
 
 func (p pointerparm) GenValue(value int, caller bool) (string, int) {

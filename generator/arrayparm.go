@@ -66,9 +66,7 @@ func (p arrayparm) GenElemRef(elidx int, path string) (string, parm) {
 
 	// For empty arrays, convention is to return empty string
 	if ene == 0 {
-		var rp parm
-		rp = &p
-		return "", rp
+		return "", &p
 	}
 
 	// Find slot within array of element of interest

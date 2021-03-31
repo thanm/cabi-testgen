@@ -59,9 +59,7 @@ func (p numparm) IsControl() bool {
 }
 
 func (p numparm) GenElemRef(elidx int, path string) (string, parm) {
-	var rp parm
-	rp = &p
-	return path, rp
+	return path, &p
 }
 
 func (p numparm) Declare(b *bytes.Buffer, prefix string, suffix string, caller bool) {

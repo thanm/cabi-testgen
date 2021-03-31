@@ -18,9 +18,7 @@ func (p stringparm) Declare(b *bytes.Buffer, prefix string, suffix string, calle
 }
 
 func (p stringparm) GenElemRef(elidx int, path string) (string, parm) {
-	var rp parm
-	rp = &p
-	return path, rp
+	return path, &p
 }
 
 var letters = []rune("�꿦3򂨃f6ꂅ8ˋ<􂊇񊶿(z̽|ϣᇊ񁗇򟄼q񧲥筁{ЂƜĽ")

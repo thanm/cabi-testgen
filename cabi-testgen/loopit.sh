@@ -2,8 +2,8 @@
 #
 # Simple test script for performing a series of test runs.
 #
-DOMINIMIZE=yes
-#DOMINIMIZE=no
+#DOMINIMIZE=yes
+DOMINIMIZE=no
 echo export GOEXPERIMENT=regabi
 export GOEXPERIMENT=regabi
 HOWMANY=$1
@@ -12,6 +12,21 @@ if [ -z "$HOWMANY" ]; then
 fi
 ITER=${HOWMANY}
 go build .
+function cleanUnused() {
+  local SAVE=$1
+  local NUMP=$2
+  local DIR=$3
+  local CLEANED=""
+  P=0
+  while [ $P != $NUMP ]; do
+    if [ $P != $SAVE ]; then
+      CLEANED="$CLEANED $P"
+      rm -rf $DIR/genChecker${P} ${DIR}/genCaller${P}
+    fi
+    P=`expr $P + 1`
+  done
+  echo -n "... cleaning unused: $CLEANED"
+}
 SEED=`seconds.py`
 HERE=`pwd`
 PRAG=""
@@ -101,14 +116,7 @@ while [ $ITER !=  0 ]; do
       echo "... bad package $BADP bad function $BADF"
       
       # Clean unused packages
-      P=0
-      while [ $P != $NP ]; do
-        if [ $P != $BADP ]; then
-          echo "... cleaning unused $P"
-          rm -rf $D/genChecker$P $D/genCaller$P
-        fi
-        P=`expr $P + 1`
-      done
+      cleanUnused $BADP $NP $D
     fi
     exit 1
   fi
@@ -134,14 +142,7 @@ while [ $ITER !=  0 ]; do
           exit 2
         fi
         # Clean unused packages
-        P=0
-        while [ $P != $NP ]; do
-          if [ $P != $PK ]; then
-            echo "... cleaning unused $P"
-            rm -rf $D/genChecker$P $D/genCaller$P
-          fi
-          P=`expr $P + 1`
-        done
+        cleanUnused $PK $NP $D
         echo "minimization complete"
       fi
     fi
