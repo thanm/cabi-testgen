@@ -23,7 +23,7 @@ func (p stringparm) GenElemRef(elidx int, path string) (string, parm) {
 
 var letters = []rune("�꿦3򂨃f6ꂅ8ˋ<􂊇񊶿(z̽|ϣᇊ񁗇򟄼q񧲥筁{ЂƜĽ")
 
-func (p stringparm) GenValue(value int, caller bool) (string, int) {
+func (p stringparm) GenValue(s *genstate, value int, caller bool) (string, int) {
 	ns := len(letters) - 9
 	nel := rand.Intn(8)
 	st := rand.Intn(ns)

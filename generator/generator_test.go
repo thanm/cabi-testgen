@@ -31,7 +31,7 @@ func TestBasic(t *testing.T) {
 		var buf bytes.Buffer
 		var b *bytes.Buffer = &buf
 		s.emitCaller(fp, b, i)
-		s.emitChecker(fp, b, i)
+		s.emitChecker(fp, b, i, true)
 	}
 	if s.errs != 0 {
 		t.Errorf("%d errors during Generate", s.errs)
@@ -51,7 +51,7 @@ func TestMoreComplicated(t *testing.T) {
 		var b *bytes.Buffer = &buf
 		s.emitCaller(fp, b, i)
 		verb(1, "finished iter %d caller", i)
-		s.emitChecker(fp, b, i)
+		s.emitChecker(fp, b, i, true)
 		verb(1, "finished iter %d checker", i)
 		if s.errs != 0 {
 			t.Errorf("%d errors during Generate iter %d", s.errs, i)

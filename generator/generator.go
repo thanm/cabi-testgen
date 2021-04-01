@@ -260,6 +260,7 @@ type genstate struct {
 	ipref     string
 	tag       string
 	numtpk    int
+	pkidx     int
 	errs      int
 	pragma    string
 	tunables  TunableParams
@@ -270,6 +271,8 @@ type genstate struct {
 	newrfuncs []funcdesc
 	gvars     map[string]string
 	newgvars  []funcdesc
+	nfuncs    map[string]string
+	newnfuncs []funcdesc
 }
 
 func (s *genstate) intFlavor() string {
@@ -347,6 +350,13 @@ func (s *genstate) GenParm(f *funcdef, depth int, mkctl bool, pidx int) parm {
 		amt -= int(off)
 		tf[0] = 0
 		tf[1] = 0
+	}
+
+	// Use pointer params only at the top level. We don't want pointer
+	// values embedded in structs at the moment, since this complicates
+	// the process of comparing elements.
+	if depth != 0 {
+		tf[6] = 0
 	}
 
 	// Convert tf into a cumulative sum
@@ -440,7 +450,7 @@ func (s *genstate) GenParm(f *funcdef, depth int, mkctl bool, pidx int) parm {
 		}
 	case which < tf[6]:
 		{
-			pp := mkPointerParm(s.GenParm(f, depth, false, pidx))
+			pp := mkPointerParm(s.GenParm(f, depth+1, false, pidx))
 			retval = &pp
 		}
 	case which < tf[7]:
@@ -545,7 +555,7 @@ func (s *genstate) emitCaller(f *funcdef, b *bytes.Buffer, pidx int) {
 	var value int = 1
 	for ri, r := range f.returns {
 		var valstr string
-		valstr, value = r.GenValue(value, true)
+		valstr, value = r.GenValue(s, value, true)
 		b.WriteString(fmt.Sprintf("  c%d := %s\n", ri, valstr))
 	}
 
@@ -557,7 +567,7 @@ func (s *genstate) emitCaller(f *funcdef, b *bytes.Buffer, pidx int) {
 		if p.IsControl() {
 			valstr = "10"
 		} else {
-			valstr, value = p.GenValue(value, true)
+			valstr, value = p.GenValue(s, value, true)
 		}
 		b.WriteString(fmt.Sprintf("  p%d = %s\n", pi, valstr))
 		f.values = append(f.values, value)
@@ -566,7 +576,7 @@ func (s *genstate) emitCaller(f *funcdef, b *bytes.Buffer, pidx int) {
 	// generate receiver constant if applicable
 	if f.method {
 		f.receiver.Declare(b, "  var rcvr", "\n", true)
-		valstr, value := f.receiver.GenValue(value, true)
+		valstr, value := f.receiver.GenValue(s, value, true)
 		b.WriteString(fmt.Sprintf("  rcvr = %s\n", valstr))
 		f.values = append(f.values, value)
 	}
@@ -597,8 +607,14 @@ func (s *genstate) emitCaller(f *funcdef, b *bytes.Buffer, pidx int) {
 
 	// checking values returned
 	cm := f.complexityMeasure()
-	for ri := range f.returns {
-		b.WriteString(fmt.Sprintf("  if r%d != c%d {\n", ri, ri))
+	for ri, rp := range f.returns {
+		star := ""
+		pfc := ""
+		if _, ok := rp.(*pointerparm); ok {
+			star = "*"
+			pfc = fmt.Sprintf("%s.ParamFailCount == 0 && ", s.utilsPkg())
+		}
+		b.WriteString(fmt.Sprintf("  if %s%sr%d != %sc%d {\n", pfc, star, ri, star, ri))
 		b.WriteString(fmt.Sprintf("    %s.NoteFailure(%d, %d, %d, \"%s\", \"return\", %d, true, uint64(0))\n", s.utilsPkg(), cm, pidx, f.idx, s.checkerPkg(pidx), ri))
 		b.WriteString("  }\n")
 	}
@@ -631,7 +647,13 @@ func (s *genstate) emitCaller(f *funcdef, b *bytes.Buffer, pidx int) {
 			b.WriteString(fmt.Sprintf("  rr%dv:= rr%di.(", ri, ri))
 			r.Declare(b, "", "", true)
 			b.WriteString(")\n")
-			b.WriteString(fmt.Sprintf("  if rr%dv != c%d {\n", ri, ri))
+			star := ""
+			pfc := ""
+			if _, ok := r.(*pointerparm); ok {
+				star = "*"
+				pfc = fmt.Sprintf("%s.ParamFailCount == 0 && ", s.utilsPkg())
+			}
+			b.WriteString(fmt.Sprintf("  if %s%srr%dv != %sc%d {\n", pfc, star, ri, star, ri))
 			b.WriteString(fmt.Sprintf("    %s.NoteFailure(%d, %d, %d, \"%s\", \"return\", %d, true, uint64(0))\n", s.utilsPkg(), cm, pidx, f.idx, s.checkerPkg(pidx), ri))
 			b.WriteString("  }\n")
 		}
@@ -668,10 +690,15 @@ type funcdesc struct {
 	p    parm
 	pp   parm
 	name string
+	tag  string
 }
 
-func (s *genstate) emitDerefFuncs(b *bytes.Buffer) {
+func (s *genstate) emitDerefFuncs(b *bytes.Buffer, emit bool) {
 	for _, fd := range s.newpfuncs {
+		if !emit {
+			delete(s.pfuncs, fd.tag)
+			continue
+		}
 		b.WriteString("\n//go:noinline\n")
 		b.WriteString(fmt.Sprintf("func %s(", fd.name))
 		fd.pp.Declare(b, "x", "", false)
@@ -684,8 +711,12 @@ func (s *genstate) emitDerefFuncs(b *bytes.Buffer) {
 	s.newpfuncs = nil
 }
 
-func (s *genstate) emitAssignFuncs(b *bytes.Buffer) {
+func (s *genstate) emitAssignFuncs(b *bytes.Buffer, emit bool) {
 	for _, fd := range s.newrfuncs {
+		if !emit {
+			delete(s.rfuncs, fd.tag)
+			continue
+		}
 		b.WriteString("\n//go:noinline\n")
 		b.WriteString(fmt.Sprintf("func %s(", fd.name))
 		fd.pp.Declare(b, "x", "", false)
@@ -696,6 +727,28 @@ func (s *genstate) emitAssignFuncs(b *bytes.Buffer) {
 		b.WriteString("}\n")
 	}
 	s.newrfuncs = nil
+}
+
+func (s *genstate) emitNewFuncs(b *bytes.Buffer, emit bool) {
+	for _, fd := range s.newnfuncs {
+		if !emit {
+			delete(s.nfuncs, fd.tag)
+			continue
+		}
+		b.WriteString("\n//go:noinline\n")
+		b.WriteString(fmt.Sprintf("func %s(", fd.name))
+		fd.p.Declare(b, "i", "", false)
+		b.WriteString(") ")
+		fd.pp.Declare(b, "", "", false)
+		b.WriteString(" {\n")
+		b.WriteString("  x := new(")
+		fd.p.Declare(b, "", "", false)
+		b.WriteString(")\n")
+		b.WriteString("  *x = i\n")
+		b.WriteString("  return x\n")
+		b.WriteString("}\n\n")
+	}
+	s.newnfuncs = nil
 }
 
 func (s *genstate) emitGlobalVars(b *bytes.Buffer) {
@@ -709,9 +762,10 @@ func (s *genstate) emitGlobalVars(b *bytes.Buffer) {
 	b.WriteString("\n")
 }
 
-func (s *genstate) emitAddrTakenHelpers(b *bytes.Buffer) {
-	s.emitDerefFuncs(b)
-	s.emitAssignFuncs(b)
+func (s *genstate) emitAddrTakenHelpers(b *bytes.Buffer, emit bool) {
+	s.emitDerefFuncs(b, emit)
+	s.emitAssignFuncs(b, emit)
+	s.emitNewFuncs(b, emit)
 	s.emitGlobalVars(b)
 }
 
@@ -727,7 +781,7 @@ func (s *genstate) genGvar(p parm) string {
 		return gv
 	}
 	gv = fmt.Sprintf("gvar_%d", len(s.gvars))
-	s.newgvars = append(s.newgvars, funcdesc{pp: pp, p: p, name: gv})
+	s.newgvars = append(s.newgvars, funcdesc{pp: pp, p: p, name: gv, tag: tag})
 	s.gvars[tag] = gv
 	return gv
 }
@@ -744,7 +798,7 @@ func (s *genstate) genParamDerefFunc(p parm) string {
 		return f
 	}
 	f = fmt.Sprintf("deref_%d", len(s.pfuncs))
-	s.newpfuncs = append(s.newpfuncs, funcdesc{pp: pp, p: p, name: f})
+	s.newpfuncs = append(s.newpfuncs, funcdesc{pp: pp, p: p, name: f, tag: tag})
 	s.pfuncs[tag] = f
 	return f
 }
@@ -761,8 +815,25 @@ func (s *genstate) genAssignFunc(p parm) string {
 		return f
 	}
 	f = fmt.Sprintf("retassign_%d", len(s.rfuncs))
-	s.newrfuncs = append(s.newrfuncs, funcdesc{pp: pp, p: p, name: f})
+	s.newrfuncs = append(s.newrfuncs, funcdesc{pp: pp, p: p, name: f, tag: tag})
 	s.rfuncs[tag] = f
+	return f
+}
+
+func (s *genstate) genNewFunc(p parm) string {
+	var pp parm
+	ppp := mkPointerParm(p)
+	pp = &ppp
+	b := bytes.NewBuffer(nil)
+	pp.Declare(b, "x", "", false)
+	tag := b.String()
+	f, ok := s.nfuncs[tag]
+	if ok {
+		return f
+	}
+	f = fmt.Sprintf("New_%d", len(s.nfuncs))
+	s.newnfuncs = append(s.newnfuncs, funcdesc{pp: pp, p: p, name: f, tag: tag})
+	s.nfuncs[tag] = f
 	return f
 }
 
@@ -809,7 +880,7 @@ func (s *genstate) emitParamChecks(f *funcdef, b *bytes.Buffer, pidx int, value 
 			haveControl = true
 		} else if p.IsBlank() {
 			var valstr string
-			valstr, value = p.GenValue(value, false)
+			valstr, value = p.GenValue(s, value, false)
 			if f.recur {
 				b.WriteString(fmt.Sprintf("  brc%d := %s\n", pi, valstr))
 			} else {
@@ -822,13 +893,17 @@ func (s *genstate) emitParamChecks(f *funcdef, b *bytes.Buffer, pidx int, value 
 				var valstr string
 				verb(4, "emitting check-code for p%d el %d value=%d", pi, i, value)
 				elref, elparm := p.GenElemRef(i, s.genParamRef(p, pi))
-				valstr, value = elparm.GenValue(value, false)
+				valstr, value = elparm.GenValue(s, value, false)
 				if elref == "" || elref == "_" || cel == 0 {
 					verb(4, "empty skip p%d el %d", pi, i)
 					continue
 				} else {
+					star := ""
+					if _, ok := elparm.(*pointerparm); ok {
+						star = "*"
+					}
 					b.WriteString(fmt.Sprintf("  p%df%dc := %s\n", pi, i, valstr))
-					b.WriteString(fmt.Sprintf("  if %s != p%df%dc {\n", elref, pi, i))
+					b.WriteString(fmt.Sprintf("  if %s%s != %sp%df%dc {\n", star, elref, star, pi, i))
 					b.WriteString(fmt.Sprintf("    %s.NoteFailureElem(%d, %d, %d, \"%s\", \"parm\", %d, %d, false, pad[0])\n", s.utilsPkg(), cm, pidx, f.idx, s.checkerPkg(pidx), pi, i))
 					b.WriteString("    return\n")
 					b.WriteString("  }\n")
@@ -854,7 +929,7 @@ func (s *genstate) emitParamChecks(f *funcdef, b *bytes.Buffer, pidx int, value 
 			var valstr string
 			verb(4, "emitting check-code for rcvr el %d value=%d", i, value)
 			elref, elparm := f.receiver.GenElemRef(i, "rcvr")
-			valstr, value = elparm.GenValue(value, false)
+			valstr, value = elparm.GenValue(s, value, false)
 			if elref == "" || strings.HasPrefix(elref, "_") {
 				verb(4, "empty skip rcvr el %d", i)
 				continue
@@ -921,12 +996,16 @@ func (s *genstate) emitDeferChecks(f *funcdef, b *bytes.Buffer, pidx int, value 
 		numel := p.NumElements()
 		cel := checkableElements(p)
 		for i := 0; i < numel; i++ {
-			elref, _ := p.GenElemRef(i, s.genParamRef(p, pi))
+			elref, elparm := p.GenElemRef(i, s.genParamRef(p, pi))
 			if elref == "" || elref == "_" || cel == 0 {
 				verb(4, "empty skip p%d el %d", pi, i)
 				continue
 			} else {
-				b.WriteString(fmt.Sprintf("  if %s != p%df%dc {\n", elref, pi, i))
+				star := ""
+				if _, ok := elparm.(*pointerparm); ok {
+					star = "*"
+				}
+				b.WriteString(fmt.Sprintf("  if %s%s != %sp%df%dc {\n", star, elref, star, pi, i))
 				b.WriteString(fmt.Sprintf("    %s.NoteFailureElem(%d, %d, %d, \"%s\", \"parm\", %d, %d, false, pad[0])\n", s.utilsPkg(), cm, pidx, f.idx, s.checkerPkg(pidx), pi, i))
 				b.WriteString("    return\n")
 				b.WriteString("  }\n")
@@ -950,7 +1029,7 @@ func (s *genstate) emitDeferChecks(f *funcdef, b *bytes.Buffer, pidx int, value 
 	return value
 }
 
-func (s *genstate) emitChecker(f *funcdef, b *bytes.Buffer, pidx int) {
+func (s *genstate) emitChecker(f *funcdef, b *bytes.Buffer, pidx int, emit bool) {
 	verb(4, "emitting struct and array defs")
 	emitStructAndArrayDefs(f, b)
 	b.WriteString(fmt.Sprintf("// %d returns %d params\n", len(f.returns), len(f.params)))
@@ -1008,7 +1087,7 @@ func (s *genstate) emitChecker(f *funcdef, b *bytes.Buffer, pidx int) {
 	value := 1
 	for ri, r := range f.returns {
 		var valstr string
-		valstr, value = r.GenValue(value, false)
+		valstr, value = r.GenValue(s, value, false)
 		b.WriteString(fmt.Sprintf("  rc%d := %s\n", ri, valstr))
 	}
 
@@ -1049,7 +1128,7 @@ func (s *genstate) emitChecker(f *funcdef, b *bytes.Buffer, pidx int) {
 	b.WriteString("}\n\n")
 
 	// emit any new helper funcs referenced by this test function
-	s.emitAddrTakenHelpers(b)
+	s.emitAddrTakenHelpers(b, emit)
 }
 
 // complexityMeasure returns an integer that estimates how complex a given test function
@@ -1179,7 +1258,7 @@ func (s *genstate) GenPair(calloutfile *os.File, checkoutfile *os.File, fidx int
 
 	// Emit checker side
 	rand.Seed(seed)
-	s.emitChecker(fp, b, pidx)
+	s.emitChecker(fp, b, pidx, emit)
 	if emit {
 		b.WriteTo(checkoutfile)
 	}
@@ -1373,11 +1452,13 @@ func Generate(tag string, outdir string, pkgpath string, numit int, numtpkgs int
 		checkeroutfile := openOutputFile(s.checkerFile(k), s.checkerPkg(k),
 			[]string{s.utilsPkg()}, ipref)
 
+		s.pkidx = k
 		s.newpfuncs = nil
 		s.newrfuncs = nil
 		s.newgvars = nil
 		s.pfuncs = make(map[string]string)
 		s.rfuncs = make(map[string]string)
+		s.nfuncs = make(map[string]string)
 		s.gvars = make(map[string]string)
 
 		var b bytes.Buffer

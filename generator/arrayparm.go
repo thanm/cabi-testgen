@@ -40,7 +40,7 @@ func (p arrayparm) String() string {
 	return fmt.Sprintf("%s %d-element array of %s", p.aname, p.nelements, p.eltype.String())
 }
 
-func (p arrayparm) GenValue(value int, caller bool) (string, int) {
+func (p arrayparm) GenValue(s *genstate, value int, caller bool) (string, int) {
 	var buf bytes.Buffer
 
 	verb(5, "arrayparm.GenValue(%d)", value)
@@ -52,7 +52,7 @@ func (p arrayparm) GenValue(value int, caller bool) (string, int) {
 	buf.WriteString(fmt.Sprintf("%s{", n))
 	for i := 0; i < int(p.nelements); i++ {
 		var valstr string
-		valstr, value = p.eltype.GenValue(value, caller)
+		valstr, value = p.eltype.GenValue(s, value, caller)
 		writeCom(&buf, i)
 		buf.WriteString(valstr)
 	}

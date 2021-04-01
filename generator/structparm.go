@@ -50,7 +50,7 @@ func (p structparm) String() string {
 	return buf.String()
 }
 
-func (p structparm) GenValue(value int, caller bool) (string, int) {
+func (p structparm) GenValue(s *genstate, value int, caller bool) (string, int) {
 	var buf bytes.Buffer
 
 	verb(5, "structparm.GenValue(%d)", value)
@@ -63,7 +63,7 @@ func (p structparm) GenValue(value int, caller bool) (string, int) {
 	nbfi := 0
 	for fi, f := range p.fields {
 		var valstr string
-		valstr, value = f.GenValue(value, caller)
+		valstr, value = f.GenValue(s, value, caller)
 		if p.fields[fi].IsBlank() {
 			buf.WriteString("/* ")
 			valstr = strings.ReplaceAll(valstr, "/*", "[[")

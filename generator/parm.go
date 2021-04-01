@@ -6,7 +6,7 @@ import "bytes"
 type parm interface {
 	Declare(b *bytes.Buffer, prefix string, suffix string, caller bool)
 	GenElemRef(elidx int, path string) (string, parm)
-	GenValue(value int, caller bool) (string, int)
+	GenValue(s *genstate, value int, caller bool) (string, int)
 	IsControl() bool
 	NumElements() int
 	String() string

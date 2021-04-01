@@ -26,12 +26,15 @@ func (p pointerparm) GenElemRef(elidx int, path string) (string, parm) {
 	return path, &p
 }
 
-func (p pointerparm) GenValue(value int, caller bool) (string, int) {
-	n := p.totype.TypeName()
+func (p pointerparm) GenValue(s *genstate, value int, caller bool) (string, int) {
+	pref := ""
 	if caller {
-		n = p.totype.QualName()
+		pref = s.checkerPkg(s.pkidx) + "."
 	}
-	return fmt.Sprintf("(*%s)(nil)", n), value
+	var valstr string
+	valstr, value = p.totype.GenValue(s, value, caller)
+	fname := s.genNewFunc(p.totype)
+	return fmt.Sprintf("%s%s(%s)", pref, fname, valstr), value
 }
 
 func (p pointerparm) IsControl() bool {
