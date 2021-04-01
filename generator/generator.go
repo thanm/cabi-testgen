@@ -264,6 +264,7 @@ type genstate struct {
 	pkidx     int
 	errs      int
 	pragma    string
+	sforce    bool
 	tunables  TunableParams
 	tstack    []TunableParams
 	pfuncs    map[string]string
@@ -593,6 +594,9 @@ func (s *genstate) emitCaller(f *funcdef, b *bytes.Buffer, pidx int) {
 	// calling code
 	b.WriteString(fmt.Sprintf("  // %d returns %d params\n",
 		len(f.returns), len(f.params)))
+	if s.sforce {
+		b.WriteString("  hackStack() // force stack growth on next call\n")
+	}
 	b.WriteString("  ")
 	for ri := range f.returns {
 		writeCom(b, ri)
@@ -1210,6 +1214,9 @@ func (s *genstate) emitReturn(f *funcdef, b *bytes.Buffer, doRecursiveCall bool)
 	// generate the recursive call itself if applicable
 	if doRecursiveCall {
 		b.WriteString("  // recursive call\n  ")
+		if s.sforce {
+			b.WriteString("  //hackStack() // force stack growth on next call\n")
+		}
 		rcall := s.emitRecursiveCall(f)
 		if indirectReturn {
 			for ri := range f.returns {
@@ -1274,21 +1281,32 @@ func (s *genstate) GenPair(calloutfile *os.File, checkoutfile *os.File, fidx int
 	return seed + 1
 }
 
-func openOutputFile(filename string, pk string, imports []string, ipref string) *os.File {
+func (s *genstate) openOutputFile(filename string, pk string, imports []string, ipref string) *os.File {
 	verb(1, "opening %s", filename)
 	outf, err := os.OpenFile(filename, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0666)
 	if err != nil {
 		log.Fatal(err)
 	}
+	haveunsafe := false
 	outf.WriteString(fmt.Sprintf("package %s\n\n", pk))
 	for _, imp := range imports {
 		if imp == "reflect" {
 			outf.WriteString("import \"reflect\"\n")
 			continue
 		}
+		if imp == "unsafe" {
+			outf.WriteString("import _ \"unsafe\"\n")
+			haveunsafe = true
+			continue
+		}
 		outf.WriteString(fmt.Sprintf("import \"%s%s\"\n", ipref, imp))
 	}
 	outf.WriteString("\n")
+	if s.sforce && haveunsafe {
+		outf.WriteString("// Hack: reach into runtime to grab this testing hook.\n")
+		outf.WriteString("//go:linkname hackStack runtime.gcTestMoveStackOnNextCall\n")
+		outf.WriteString("func hackStack()\n\n")
+	}
 	return outf
 }
 
@@ -1408,7 +1426,7 @@ func emitFP(fn int, pk int, fcnmask map[int]int, pkmask map[int]int) bool {
 	return doemit
 }
 
-func Generate(tag string, outdir string, pkgpath string, numit int, numtpkgs int, seed int64, pragma string, fcnmask map[int]int, pkmask map[int]int, utilsinl bool, maxfail int) int {
+func Generate(tag string, outdir string, pkgpath string, numit int, numtpkgs int, seed int64, pragma string, fcnmask map[int]int, pkmask map[int]int, utilsinl bool, maxfail int, forcestackgrowth bool) int {
 	mainpkg := tag + "Main"
 
 	var ipref string
@@ -1422,6 +1440,7 @@ func Generate(tag string, outdir string, pkgpath string, numit int, numtpkgs int
 		tag:    tag,
 		numtpk: numtpkgs,
 		pragma: pragma,
+		sforce: forcestackgrowth,
 	}
 
 	if outdir != "." {
@@ -1441,23 +1460,28 @@ func Generate(tag string, outdir string, pkgpath string, numit int, numtpkgs int
 	mainimports = append(mainimports, s.utilsPkg())
 
 	utilsfile := outdir + "/" + s.utilsPkg() + "/" + s.utilsPkg() + ".go"
-	utilsoutfile := openOutputFile(utilsfile, s.utilsPkg(), []string{}, "")
+	utilsoutfile := s.openOutputFile(utilsfile, s.utilsPkg(), []string{}, "")
 	verb(1, "emit utils")
 	emitUtils(utilsoutfile, maxfail)
 	utilsoutfile.Close()
 
 	mainfile := outdir + "/" + mainpkg + ".go"
-	mainoutfile := openOutputFile(mainfile, "main", mainimports, ipref)
+	mainoutfile := s.openOutputFile(mainfile, "main", mainimports, ipref)
 
 	for k := 0; k < numtpkgs; k++ {
 		callerImports := []string{s.checkerPkg(k), s.utilsPkg()}
+		checkerImports := []string{s.utilsPkg()}
 		if tunables.doReflectCall {
 			callerImports = append(callerImports, "reflect")
 		}
-		calleroutfile := openOutputFile(s.callerFile(k), s.callerPkg(k),
+		if s.sforce {
+			callerImports = append(callerImports, "unsafe")
+			checkerImports = append(checkerImports, "unsafe")
+		}
+		calleroutfile := s.openOutputFile(s.callerFile(k), s.callerPkg(k),
 			callerImports, ipref)
-		checkeroutfile := openOutputFile(s.checkerFile(k), s.checkerPkg(k),
-			[]string{s.utilsPkg()}, ipref)
+		checkeroutfile := s.openOutputFile(s.checkerFile(k), s.checkerPkg(k),
+			checkerImports, ipref)
 
 		s.pkidx = k
 		s.newpfuncs = nil
