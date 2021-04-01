@@ -251,6 +251,7 @@ type funcdef struct {
 	params     []parm
 	returns    []parm
 	values     []int
+	rstack     int
 	recur      bool
 	method     bool
 }
@@ -523,6 +524,12 @@ func (s *genstate) GenFunc(fidx int, pidx int) *funcdef {
 		}
 		f.returns = append(f.returns, r)
 	}
+	spw := uint(rand.Intn(11))
+	rstack := 1 << spw
+	if rstack < 4 {
+		rstack = 4
+	}
+	f.rstack = rstack
 	return f
 }
 
@@ -1080,8 +1087,8 @@ func (s *genstate) emitChecker(f *funcdef, b *bytes.Buffer, pidx int, emit bool)
 
 	// local storage
 	b.WriteString("  // consume some stack space, so as to trigger morestack\n")
-	b.WriteString("  var pad [256]uint64\n")
-	b.WriteString(fmt.Sprintf("  pad[%s.FailCount&0x1f]++\n", s.utilsPkg()))
+	b.WriteString(fmt.Sprintf("  var pad [%d]uint64\n", f.rstack))
+	b.WriteString(fmt.Sprintf("  pad[%s.FailCount&0x1]++\n", s.utilsPkg()))
 
 	// generate return constants
 	value := 1

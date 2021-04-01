@@ -29,7 +29,7 @@ function cleanUnused() {
 }
 SEED=`seconds.py`
 HERE=`pwd`
-PRAG="-pragma registerparams -method=0 -reflect=1 -maxfail=9999"
+PRAG="-pragma registerparams -method=0 -reflect=0 -maxfail=9999"
 #PRAG=""
 NP=20
 NF=20
