@@ -13,6 +13,7 @@ type parm interface {
 	TypeName() string
 	QualName() string
 	IsBlank() bool
+	HasPointer() bool
 	SetBlank(v bool)
 	AddrTaken() addrTakenHow
 	SetAddrTaken(val addrTakenHow)

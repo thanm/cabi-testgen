@@ -53,3 +53,7 @@ func (p stringparm) TypeName() string {
 func (p stringparm) QualName() string {
 	return "string"
 }
+
+func (p stringparm) HasPointer() bool {
+	return false
+}

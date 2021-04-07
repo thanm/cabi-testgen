@@ -63,3 +63,7 @@ func mkPointerParm(to parm) pointerparm {
 	pp.totype = to
 	return pp
 }
+
+func (p pointerparm) HasPointer() bool {
+	return true
+}

@@ -132,3 +132,7 @@ func (p numparm) GenValue(s *genstate, value int, caller bool) (string, int) {
 	verb(5, "numparm.GenValue(%d) = %s", value, r)
 	return r, nv
 }
+
+func (p numparm) HasPointer() bool {
+	return false
+}

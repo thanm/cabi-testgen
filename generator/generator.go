@@ -354,13 +354,6 @@ func (s *genstate) GenParm(f *funcdef, depth int, mkctl bool, pidx int) parm {
 		tf[1] = 0
 	}
 
-	// Use pointer params only at the top level. We don't want pointer
-	// values embedded in structs at the moment, since this complicates
-	// the process of comparing elements.
-	if depth != 0 {
-		tf[6] = 0
-	}
-
 	// Convert tf into a cumulative sum
 	sum := uint8(0)
 	for i := 0; i < len(tf); i++ {
@@ -534,6 +527,59 @@ func (s *genstate) GenFunc(fidx int, pidx int) *funcdef {
 	return f
 }
 
+func genDeref(p parm) (parm, string) {
+	curp := p
+	star := ""
+	for {
+		if pp, ok := curp.(*pointerparm); ok {
+			star += "*"
+			curp = pp.totype
+		} else {
+			return curp, star
+		}
+	}
+}
+
+func emitCompareFunc(b *bytes.Buffer, p parm) {
+	if !p.HasPointer() {
+		return
+	}
+
+	tn := p.TypeName()
+	b.WriteString(fmt.Sprintf("// equal func for %s\n", tn))
+	b.WriteString("//go:noinline\n")
+	b.WriteString(fmt.Sprintf("func Equal%s(left %s, right %s) bool {\n", tn, tn, tn))
+	b.WriteString("  return ")
+	numel := p.NumElements()
+	ncmp := 0
+	for i := 0; i < numel; i++ {
+		lelref, lelparm := p.GenElemRef(i, "left")
+		relref, _ := p.GenElemRef(i, "right")
+		if lelref == "" || lelref == "_" {
+			continue
+		}
+		basep, star := genDeref(lelparm)
+		// Handle *p where p is an empty struct.
+		if basep.NumElements() == 0 {
+			continue
+		}
+		if ncmp != 0 {
+			b.WriteString("  && ")
+		}
+		ncmp++
+		if basep.HasPointer() {
+			efn := "Equal" + basep.TypeName()
+			b.WriteString(fmt.Sprintf("  %s(%s%s, %s%s)", efn, star, lelref, star, relref))
+		} else {
+			b.WriteString(fmt.Sprintf("%s%s == %s%s", star, lelref, star, relref))
+		}
+	}
+	if ncmp == 0 {
+		b.WriteString("true")
+	}
+	b.WriteString("\n}\n\n")
+}
+
 func emitStructAndArrayDefs(f *funcdef, b *bytes.Buffer) {
 	for _, s := range f.structdefs {
 		b.WriteString(fmt.Sprintf("type %s struct {\n", s.sname))
@@ -541,10 +587,12 @@ func emitStructAndArrayDefs(f *funcdef, b *bytes.Buffer) {
 			sp.Declare(b, s.FieldName(fi), "\n", false)
 		}
 		b.WriteString("}\n\n")
+		emitCompareFunc(b, &s)
 	}
 	for _, a := range f.arraydefs {
 		b.WriteString(fmt.Sprintf("type %s [%d]%s\n\n", a.aname,
 			a.nelements, a.eltype.TypeName()))
+		emitCompareFunc(b, &a)
 	}
 	for _, td := range f.typedefs {
 		b.WriteString(fmt.Sprintf("type %s %s\n\n", td.aname,
@@ -621,11 +669,21 @@ func (s *genstate) emitCaller(f *funcdef, b *bytes.Buffer, pidx int) {
 	for ri, rp := range f.returns {
 		star := ""
 		pfc := ""
-		if _, ok := rp.(*pointerparm); ok {
-			star = "*"
+		curp, star := genDeref(rp)
+		// Handle *p where p is an empty struct.
+		if curp.NumElements() == 0 {
+			b.WriteString(fmt.Sprintf("  _, _ = r%d, c%d // zero size\n", ri, ri))
+			continue
+		}
+		if star != "" {
 			pfc = fmt.Sprintf("%s.ParamFailCount == 0 && ", s.utilsPkg())
 		}
-		b.WriteString(fmt.Sprintf("  if %s%sr%d != %sc%d {\n", pfc, star, ri, star, ri))
+		if curp.HasPointer() {
+			efn := "!" + s.checkerPkg(pidx) + ".Equal" + curp.TypeName()
+			b.WriteString(fmt.Sprintf("  if %s%s(%sr%d, %sc%d) {\n", pfc, efn, star, ri, star, ri))
+		} else {
+			b.WriteString(fmt.Sprintf("  if %s%sr%d != %sc%d {\n", pfc, star, ri, star, ri))
+		}
 		b.WriteString(fmt.Sprintf("    %s.NoteFailure(%d, %d, %d, \"%s\", \"return\", %d, true, uint64(0))\n", s.utilsPkg(), cm, pidx, f.idx, s.checkerPkg(pidx), ri))
 		b.WriteString("  }\n")
 	}
@@ -658,13 +716,24 @@ func (s *genstate) emitCaller(f *funcdef, b *bytes.Buffer, pidx int) {
 			b.WriteString(fmt.Sprintf("  rr%dv:= rr%di.(", ri, ri))
 			r.Declare(b, "", "", true)
 			b.WriteString(")\n")
+
 			star := ""
 			pfc := ""
-			if _, ok := r.(*pointerparm); ok {
-				star = "*"
+			curp, star := genDeref(r)
+			// Handle *p where p is an empty struct.
+			if curp.NumElements() == 0 {
+				b.WriteString(fmt.Sprintf("  _, _ = rr%dv, c%d // zero size\n", ri, ri))
+				continue
+			}
+			if star != "" {
 				pfc = fmt.Sprintf("%s.ParamFailCount == 0 && ", s.utilsPkg())
 			}
-			b.WriteString(fmt.Sprintf("  if %s%srr%dv != %sc%d {\n", pfc, star, ri, star, ri))
+			if curp.HasPointer() {
+				efn := "!" + s.checkerPkg(pidx) + ".Equal" + curp.TypeName()
+				b.WriteString(fmt.Sprintf("  if %s%s(%srr%dv, %sc%d) {\n", pfc, efn, star, ri, star, ri))
+			} else {
+				b.WriteString(fmt.Sprintf("  if %s%srr%dv != %sc%d {\n", pfc, star, ri, star, ri))
+			}
 			b.WriteString(fmt.Sprintf("    %s.NoteFailure(%d, %d, %d, \"%s\", \"return\", %d, true, uint64(0))\n", s.utilsPkg(), cm, pidx, f.idx, s.checkerPkg(pidx), ri))
 			b.WriteString("  }\n")
 		}
@@ -876,6 +945,24 @@ func (s *genstate) genReturnAssign(b *bytes.Buffer, r parm, idx int, val string)
 	}
 }
 
+func (s *genstate) emitParamElemCheck(f *funcdef, b *bytes.Buffer, p parm, pvar string, cvar string, paramidx int, elemidx int) {
+	basep, star := genDeref(p)
+	// Handle *p where p is an empty struct.
+	if basep.NumElements() == 0 {
+		return
+	}
+	if basep.HasPointer() {
+		efn := "Equal" + basep.TypeName()
+		b.WriteString(fmt.Sprintf("  if !%s(%s%s, %s%s) {\n", efn, star, pvar, star, cvar))
+	} else {
+		b.WriteString(fmt.Sprintf("  if %s%s != %s%s {\n", star, pvar, star, cvar))
+	}
+	cm := f.complexityMeasure()
+	b.WriteString(fmt.Sprintf("    %s.NoteFailureElem(%d, %d, %d, \"%s\", \"parm\", %d, %d, false, pad[0])\n", s.utilsPkg(), cm, s.pkidx, f.idx, s.checkerPkg(s.pkidx), paramidx, elemidx))
+	b.WriteString("    return\n")
+	b.WriteString("  }\n")
+}
+
 func (s *genstate) emitParamChecks(f *funcdef, b *bytes.Buffer, pidx int, value int) (int, bool) {
 	haveControl := false
 	dangling := []int{}
@@ -909,18 +996,17 @@ func (s *genstate) emitParamChecks(f *funcdef, b *bytes.Buffer, pidx int, value 
 					verb(4, "empty skip p%d el %d", pi, i)
 					continue
 				} else {
-					star := ""
-					if _, ok := elparm.(*pointerparm); ok {
-						star = "*"
+					basep, _ := genDeref(elparm)
+					// Handle *p where p is an empty struct.
+					if basep.NumElements() == 0 {
+						continue
 					}
-					b.WriteString(fmt.Sprintf("  p%df%dc := %s\n", pi, i, valstr))
-					b.WriteString(fmt.Sprintf("  if %s%s != %sp%df%dc {\n", star, elref, star, pi, i))
-					b.WriteString(fmt.Sprintf("    %s.NoteFailureElem(%d, %d, %d, \"%s\", \"parm\", %d, %d, false, pad[0])\n", s.utilsPkg(), cm, pidx, f.idx, s.checkerPkg(pidx), pi, i))
-					b.WriteString("    return\n")
-					b.WriteString("  }\n")
+					cvar := fmt.Sprintf("p%df%dc", pi, i)
+					b.WriteString(fmt.Sprintf("  %s := %s\n", cvar, valstr))
+					s.emitParamElemCheck(f, b, elparm, elref, cvar, pi, i)
 				}
 			}
-			if cel == 0 && p.AddrTaken() != notAddrTaken {
+			if p.AddrTaken() != notAddrTaken {
 				dangling = append(dangling, pi)
 			}
 		}
@@ -994,7 +1080,6 @@ func (s *genstate) emitDeferChecks(f *funcdef, b *bytes.Buffer, pidx int, value 
 	}
 	b.WriteString(") {\n")
 
-	cm := f.complexityMeasure()
 	for pi, p := range f.params {
 		if p.IsControl() || p.IsBlank() {
 			continue
@@ -1012,14 +1097,13 @@ func (s *genstate) emitDeferChecks(f *funcdef, b *bytes.Buffer, pidx int, value 
 				verb(4, "empty skip p%d el %d", pi, i)
 				continue
 			} else {
-				star := ""
-				if _, ok := elparm.(*pointerparm); ok {
-					star = "*"
+				basep, _ := genDeref(elparm)
+				// Handle *p where p is an empty struct.
+				if basep.NumElements() == 0 {
+					continue
 				}
-				b.WriteString(fmt.Sprintf("  if %s%s != %sp%df%dc {\n", star, elref, star, pi, i))
-				b.WriteString(fmt.Sprintf("    %s.NoteFailureElem(%d, %d, %d, \"%s\", \"parm\", %d, %d, false, pad[0])\n", s.utilsPkg(), cm, pidx, f.idx, s.checkerPkg(pidx), pi, i))
-				b.WriteString("    return\n")
-				b.WriteString("  }\n")
+				cvar := fmt.Sprintf("p%df%dc", pi, i)
+				s.emitParamElemCheck(f, b, elparm, elref, cvar, pi, i)
 			}
 		}
 	}
@@ -1335,14 +1419,14 @@ func emitUtils(outf *os.File, maxfail int) {
 	fmt.Fprintf(outf, "var Mode string\n\n")
 	fmt.Fprintf(outf, "type UtilsType int\n\n")
 	fmt.Fprintf(outf, "//go:noinline\n")
-	fmt.Fprintf(outf, "func NoteFailure(cm int, fidx int, pidx int, pkg string, pref string, parmNo int, isret bool,_ uint64) {")
+	fmt.Fprintf(outf, "func NoteFailure(cm int, pidx int, fidx int, pkg string, pref string, parmNo int, isret bool,_ uint64) {")
 	outf.WriteString(countfail)
 	fmt.Fprintf(outf, "  fmt.Fprintf(os.Stderr, ")
 	fmt.Fprintf(outf, "\"Error: fail %%s |%%d|%%d|%%d| =%%s.Test%%d= %%s %%d\\n\", Mode, cm, pidx, fidx, pkg, fidx, pref, parmNo)\n")
 	outf.WriteString(earlyexit)
 	fmt.Fprintf(outf, "}\n\n")
 	fmt.Fprintf(outf, "//go:noinline\n")
-	fmt.Fprintf(outf, "func NoteFailureElem(cm int, pidx int, fidx int, pkg string, pref string, parmNo int, elem int, isret bool,_ uint64) {\n")
+	fmt.Fprintf(outf, "func NoteFailureElem(cm int, pidx int, fidx int, pkg string, pref string, parmNo int, elem int, isret bool, _ uint64) {\n")
 	outf.WriteString(countfail)
 	fmt.Fprintf(outf, "  fmt.Fprintf(os.Stderr, ")
 	fmt.Fprintf(outf, "\"Error: fail %%s |%%d|%%d|%%d| =%%s.Test%%d= %%s %%d elem %%d\\n\", Mode, cm, pidx, fidx, pkg, fidx, pref, parmNo, elem)\n")

@@ -95,3 +95,7 @@ func (p arrayparm) GenElemRef(elidx int, path string) (string, parm) {
 func (p arrayparm) NumElements() int {
 	return p.eltype.NumElements() * int(p.nelements)
 }
+
+func (p arrayparm) HasPointer() bool {
+	return p.eltype.HasPointer()
+}

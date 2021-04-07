@@ -4,8 +4,11 @@
 #
 DOMINIMIZE=yes
 #DOMINIMIZE=no
-echo export GOEXPERIMENT=regabi
-export GOEXPERIMENT=regabi,regabireflect
+GEX=
+GEX=regabi,regabireflect,regabiargs
+GEX=regabi,regabiargs
+echo export GOEXPERIMENT=$GEX
+export GOEXPERIMENT=$GEX
 HOWMANY=$1
 if [ -z "$HOWMANY" ]; then
   HOWMANY=1
@@ -29,9 +32,9 @@ function cleanUnused() {
 }
 SEED=`seconds.py`
 HERE=`pwd`
-PRAG="-pragma registerparams -method=0 -reflect=1 -maxfail=9999"
+PRAG="-pragma registerparams -method=1 -reflect=0 -maxfail=9999"
 #PRAG=""
-NP=20
+NP=100
 NF=20
 while [ $ITER !=  0 ]; do
   echo iter $ITER
@@ -50,12 +53,14 @@ while [ $ITER !=  0 ]; do
   BADF=unset
   cd $D
   rm -f cabiTest
-  go build -gcflags="-c=1" -p 1 . 1> ${HERE}/build.err.txt 2>&1
+  go build . 1> ${HERE}/build.err.txt 2>&1
   if [ $? != 0 ]; then
     echo "*** building generated code failed, SEED=$SEED see build.err.txt"
     if [ $DOMINIMIZE != "yes" ]; then
       exit 1
     fi
+    echo "... serial build"
+    go build -gcflags="-c=1" -p 1 . 1> ${HERE}/build.err.txt 2>&1
     echo "*** now trying to minimize by package"
     mv /tmp/cabiTest /tmp/cabiTest.orig
     # Minimize by package

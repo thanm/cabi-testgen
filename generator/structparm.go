@@ -111,6 +111,20 @@ func (p structparm) GenElemRef(elidx int, path string) (string, parm) {
 
 		// Is this field the element we're interested in?
 		if fne == 1 && elidx == ct {
+
+			// The field in question may be a composite that has only
+			// multiple elements but a single non-zero-sized element.
+			// If this is the case, keep going.
+			if sp, ok := f.(*structparm); ok {
+				if len(sp.fields) > 1 {
+					ppath := fmt.Sprintf("%s.F%d", path, fi)
+					if p.fields[fi].IsBlank() || path == "_" {
+						ppath = "_"
+					}
+					return f.GenElemRef(elidx-ct, ppath)
+				}
+			}
+
 			verb(4, "found field %d type %s in GenElemRef(%d,%s)", fi, f.TypeName(), elidx, path)
 			ppath := fmt.Sprintf("%s.F%d", path, fi)
 			if p.fields[fi].IsBlank() || path == "_" {
@@ -131,4 +145,13 @@ func (p structparm) GenElemRef(elidx int, path string) (string, parm) {
 		ct += fne
 	}
 	panic(fmt.Sprintf("GenElemRef failed for struct %s elidx %d", p.TypeName(), elidx))
+}
+
+func (p structparm) HasPointer() bool {
+	for _, f := range p.fields {
+		if f.HasPointer() {
+			return true
+		}
+	}
+	return false
 }

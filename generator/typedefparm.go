@@ -68,6 +68,10 @@ func (p typedefparm) QualName() string {
 	return p.qname
 }
 
+func (p typedefparm) HasPointer() bool {
+	return p.target.HasPointer()
+}
+
 func (s *genstate) makeTypedefParm(f *funcdef, target parm, pidx int) parm {
 	var tdp typedefparm
 	ns := len(f.typedefs)

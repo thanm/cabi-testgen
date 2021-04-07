@@ -165,5 +165,3 @@ No support yet for variadic functions.
 The set of generated types is still a bit thin; it doesn't yet include
 interfaces, maps or slices.
 
-
-
