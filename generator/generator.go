@@ -1215,7 +1215,7 @@ func (s *genstate) emitReturn(f *funcdef, b *bytes.Buffer, doRecursiveCall bool)
 	if doRecursiveCall {
 		b.WriteString("  // recursive call\n  ")
 		if s.sforce {
-			b.WriteString("  //hackStack() // force stack growth on next call\n")
+			b.WriteString("  hackStack() // force stack growth on next call\n")
 		}
 		rcall := s.emitRecursiveCall(f)
 		if indirectReturn {
