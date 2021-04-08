@@ -97,8 +97,8 @@ func TestExhaustive(t *testing.T) {
 	if err != nil {
 		t.Errorf("can't create temp dir")
 	}
-	defer os.RemoveAll(td)
-	//println("=-= td is ", td)
+	//defer os.RemoveAll(td)
+	println("=-= td is ", td)
 
 	verb(1, "generating into temp dir %s", td)
 
@@ -179,13 +179,13 @@ func TestExhaustive(t *testing.T) {
 			t.Errorf("%d errors during scenarios %q Generate", errs, s.name)
 		}
 
-		verb(1, "building %s\n", td)
+		verb(1, "running %s\n", td)
 
 		cmd := exec.Command("go", "run", ".")
 		cmd.Dir = td
 		coutput, cerr := cmd.CombinedOutput()
 		if cerr != nil {
-			t.Errorf("run failed for scenario %q:  %s\n", s.name, string(coutput))
+			t.Fatalf("run failed for scenario %q:  %s\n", s.name, string(coutput))
 		}
 		verb(1, "output is: %s\n", string(coutput))
 	}

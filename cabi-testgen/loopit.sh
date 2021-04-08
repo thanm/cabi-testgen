@@ -2,11 +2,11 @@
 #
 # Simple test script for performing a series of test runs.
 #
+DOMINIMIZE=no
 DOMINIMIZE=yes
-#DOMINIMIZE=no
+GEX=regabi,regabiargs
 GEX=
 GEX=regabi,regabireflect,regabiargs
-GEX=regabi,regabiargs
 echo export GOEXPERIMENT=$GEX
 export GOEXPERIMENT=$GEX
 HOWMANY=$1
@@ -32,8 +32,8 @@ function cleanUnused() {
 }
 SEED=`seconds.py`
 HERE=`pwd`
-PRAG="-pragma registerparams -method=1 -reflect=0 -maxfail=9999"
-#PRAG=""
+PRAG="-pragma registerparams -method=1 -reflect=1 -maxfail=9999"
+PRAG=""
 NP=100
 NF=20
 while [ $ITER !=  0 ]; do

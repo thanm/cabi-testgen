@@ -158,10 +158,24 @@ Run the generator with "-help" for a complete list of options.
 
 ## Limitations, future work
 
-Method calls are supported, but only value receivers (not pointer receivers).
-
 No support yet for variadic functions.
 
 The set of generated types is still a bit thin; it doesn't yet include
-interfaces, maps or slices.
+interfaces, maps, or channels.
 
+Todos:
+
+- add support for methods with a pointer receiver 
+
+- add interface values
+
+- experiment with -clobberdead compiler option, also with GODEBUG=clobberfree
+  and explicit calls to runtime.GC()
+  
+- implement testing of reflect.MakeFunc
+
+- rework things so that instead of always checking all of a given parameter
+  value, we sometimes skip over elements (or just check the length of a slice
+  or string as opposed to looking at its value)
+  
+  

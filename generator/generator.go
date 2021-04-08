@@ -21,8 +21,11 @@ type TunableParams struct {
 	// structs have between 0 and N members
 	nStructFields uint8
 
-	// arrays have between 0 and N elements
+	// arrays/slices have between 0 and N elements
 	nArrayElements uint8
+
+	// fraction of slices vs arrays
+	sliceFraction uint8
 
 	// Controls how often ints wind up as 8/16/32/64, should
 	// add up to 100. Ex: 100 0 0 0 means all ints are 8 bit,
@@ -88,6 +91,7 @@ var tunables = TunableParams{
 	nReturnRange:   7,
 	nStructFields:  7,
 	nArrayElements: 5,
+	sliceFraction:  50,
 	intBitRanges:   [4]uint8{30, 20, 20, 30},
 	floatBitRanges: [2]uint8{50, 50},
 	unsignedRanges: [2]uint8{50, 50},
@@ -177,6 +181,9 @@ func checkTunables(t TunableParams) {
 	}
 	if t.deferFraction > 100 {
 		log.Fatal(errors.New("deferFraction not between 0 and 100"))
+	}
+	if t.sliceFraction > 100 {
+		log.Fatal(errors.New("sliceFraction not between 0 and 100"))
 	}
 }
 
@@ -402,11 +409,13 @@ func (s *genstate) GenParm(f *funcdef, depth int, mkctl bool, pidx int) parm {
 			var ap arrayparm
 			ns := len(f.arraydefs)
 			nel := uint8(rand.Intn(int(s.tunables.nArrayElements)))
+			issl := uint8(rand.Intn(100)) < s.tunables.sliceFraction
 			ap.aname = fmt.Sprintf("ArrayF%dS%dE%d", f.idx, ns, nel)
 			ap.qname = fmt.Sprintf("%s.ArrayF%dS%dE%d", s.checkerPkg(pidx),
 				f.idx, ns, nel)
 			f.arraydefs = append(f.arraydefs, ap)
 			ap.nelements = nel
+			ap.slice = issl
 			ap.eltype = s.GenParm(f, depth+1, false, pidx)
 			ap.eltype.SetBlank(false)
 			f.arraydefs[ns] = ap
@@ -590,8 +599,12 @@ func emitStructAndArrayDefs(f *funcdef, b *bytes.Buffer) {
 		emitCompareFunc(b, &s)
 	}
 	for _, a := range f.arraydefs {
-		b.WriteString(fmt.Sprintf("type %s [%d]%s\n\n", a.aname,
-			a.nelements, a.eltype.TypeName()))
+		elems := fmt.Sprintf("%d", a.nelements)
+		if a.slice {
+			elems = ""
+		}
+		b.WriteString(fmt.Sprintf("type %s [%s]%s\n\n", a.aname,
+			elems, a.eltype.TypeName()))
 		emitCompareFunc(b, &a)
 	}
 	for _, td := range f.typedefs {
@@ -966,7 +979,6 @@ func (s *genstate) emitParamElemCheck(f *funcdef, b *bytes.Buffer, p parm, pvar 
 func (s *genstate) emitParamChecks(f *funcdef, b *bytes.Buffer, pidx int, value int) (int, bool) {
 	haveControl := false
 	dangling := []int{}
-	cm := f.complexityMeasure()
 	for pi, p := range f.params {
 		verb(4, "emitting parmcheck p%d numel=%d pt=%s value=%d",
 			pi, p.NumElements(), p.TypeName(), value)
@@ -1031,11 +1043,15 @@ func (s *genstate) emitParamChecks(f *funcdef, b *bytes.Buffer, pidx int, value 
 				verb(4, "empty skip rcvr el %d", i)
 				continue
 			} else {
-				b.WriteString(fmt.Sprintf("  rcvrf%dc := %s\n", i, valstr))
-				b.WriteString(fmt.Sprintf("  if %s != rcvrf%dc {\n", elref, i))
-				b.WriteString(fmt.Sprintf("    %s.NoteFailureElem(%d, %d, %d, \"%s\", \"rcvr\", %d, -1, false, pad[0])\n", s.utilsPkg(), cm, pidx, f.idx, s.checkerPkg(pidx), i))
-				b.WriteString("    return\n")
-				b.WriteString("  }\n")
+
+				basep, _ := genDeref(elparm)
+				// Handle *p where p is an empty struct.
+				if basep.NumElements() == 0 {
+					continue
+				}
+				cvar := fmt.Sprintf("rcvrf%dc", i)
+				b.WriteString(fmt.Sprintf("  %s := %s\n", cvar, valstr))
+				s.emitParamElemCheck(f, b, elparm, elref, cvar, -1, i)
 			}
 		}
 	}

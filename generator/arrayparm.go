@@ -12,6 +12,7 @@ type arrayparm struct {
 	qname     string
 	nelements uint8
 	eltype    parm
+	slice     bool
 	isBlank
 	addrTakenHow
 }
@@ -97,5 +98,5 @@ func (p arrayparm) NumElements() int {
 }
 
 func (p arrayparm) HasPointer() bool {
-	return p.eltype.HasPointer()
+	return p.eltype.HasPointer() || p.slice
 }
