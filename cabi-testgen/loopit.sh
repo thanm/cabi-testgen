@@ -4,14 +4,18 @@
 #
 DOMINIMIZE=no
 DOMINIMIZE=yes
-GEX=regabi,regabiargs
 GEX=
 GEX=regabi,regabireflect,regabiargs
+GEX=regabi,regabiargs
 echo export GOEXPERIMENT=$GEX
 export GOEXPERIMENT=$GEX
 HOWMANY=$1
 if [ -z "$HOWMANY" ]; then
   HOWMANY=1
+fi
+DOCLEANCACHE=no
+if [ $HOWMANY > 50 ]; then
+  DOCLEANCACHE=yes
 fi
 ITER=${HOWMANY}
 go build .
@@ -32,14 +36,21 @@ function cleanUnused() {
 }
 SEED=`seconds.py`
 HERE=`pwd`
-PRAG="-pragma registerparams -method=1 -reflect=1 -maxfail=9999"
 PRAG=""
+PRAG="-pragma registerparams -method=1 -reflect=0 -maxfail=9999"
 NP=100
 NF=20
 while [ $ITER !=  0 ]; do
   echo iter $ITER
   ITER=`expr $ITER - 1`
   echo "Iter $ITER"
+  if [ "$DOCLEANCACHE" = "yes" ]; then
+    MOD0=`expr $ITER % 100`
+    if [ $MOD0 -eq 0 ]; then
+      echo go clean -cache
+      go clean -cache
+    fi
+  fi
   D=/tmp/cabiTest
   rm -rf $D ${D}.orig ${D}.pkg
   CMD="./cabi-testgen -q $NP -n $NF -s $SEED -o $D -p cabiTest $PRAG"
