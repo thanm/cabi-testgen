@@ -2,7 +2,6 @@ package generator
 
 import (
 	"bytes"
-	"math/rand"
 )
 
 // stringparm describes a parameter of string type; it implements the
@@ -25,8 +24,8 @@ var letters = []rune("�꿦3򂨃f6ꂅ8ˋ<􂊇񊶿(z̽|ϣᇊ񁗇�
 
 func (p stringparm) GenValue(s *genstate, value int, caller bool) (string, int) {
 	ns := len(letters) - 9
-	nel := rand.Intn(8)
-	st := rand.Intn(ns)
+	nel := s.wr.Intn(8)
+	st := s.wr.Intn(ns)
 	en := st + nel
 	if en > ns {
 		en = ns

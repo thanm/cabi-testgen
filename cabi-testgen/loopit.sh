@@ -1,4 +1,4 @@
-!/bin/sh
+#!/bin/sh
 #
 # Simple test script for performing a series of test runs.
 #

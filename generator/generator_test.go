@@ -3,7 +3,6 @@ package generator
 import (
 	"bytes"
 	"io/ioutil"
-	"math/rand"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,15 +22,19 @@ func mkGenState() *genstate {
 }
 
 func TestBasic(t *testing.T) {
-	rand.Seed(0)
 	checkTunables(tunables)
 	s := mkGenState()
 	for i := 0; i < 1000; i++ {
+		s.wr = NewWrapRand(int64(i))
 		fp := s.GenFunc(i, i)
 		var buf bytes.Buffer
 		var b *bytes.Buffer = &buf
+		wr := NewWrapRand(int64(i))
+		s.wr = wr
 		s.emitCaller(fp, b, i)
+		s.wr = NewWrapRand(int64(i))
 		s.emitChecker(fp, b, i, true)
+		wr.Check(s.wr)
 	}
 	if s.errs != 0 {
 		t.Errorf("%d errors during Generate", s.errs)
@@ -39,20 +42,24 @@ func TestBasic(t *testing.T) {
 }
 
 func TestMoreComplicated(t *testing.T) {
-	rand.Seed(0)
 	saveit := tunables
 	defer func() { tunables = saveit }()
 
 	checkTunables(tunables)
 	s := mkGenState()
 	for i := 0; i < 10000; i++ {
+		s.wr = NewWrapRand(int64(i))
 		fp := s.GenFunc(i, i)
 		var buf bytes.Buffer
 		var b *bytes.Buffer = &buf
+		wr := NewWrapRand(int64(i))
+		s.wr = wr
 		s.emitCaller(fp, b, i)
 		verb(1, "finished iter %d caller", i)
+		s.wr = NewWrapRand(int64(i))
 		s.emitChecker(fp, b, i, true)
 		verb(1, "finished iter %d checker", i)
+		wr.Check(s.wr)
 		if s.errs != 0 {
 			t.Errorf("%d errors during Generate iter %d", s.errs, i)
 		}
@@ -72,7 +79,6 @@ func TestIsBuildable(t *testing.T) {
 
 	verb(1, "generating into temp dir %s", td)
 
-	rand.Seed(1)
 	checkTunables(tunables)
 	pack := filepath.Base(td)
 	errs := Generate("x", td, pack, 10, 10, int64(0), "", nil, nil, false, 10, false)
@@ -140,6 +146,7 @@ func TestExhaustive(t *testing.T) {
 			"addmethod",
 			func() {
 				tunables.methodPerc = 25
+				tunables.pointerMethodCallPerc = 30
 				checkTunables(tunables)
 			},
 		},
@@ -170,17 +177,14 @@ func TestExhaustive(t *testing.T) {
 
 	// Loop over scenarios and make sure each one works properly.
 	for i, s := range scenarios {
+		t.Logf("running %s\n", s.name)
 		s.adjuster()
-		rand.Seed(int64(i + 9))
 		os.RemoveAll(td)
 		pack := filepath.Base(td)
-		errs := Generate("x", td, pack, 10, 10, int64(0), "", nil, nil, false, 10, false)
+		errs := Generate("x", td, pack, 10, 10, int64(i+9), "", nil, nil, false, 10, false)
 		if errs != 0 {
 			t.Errorf("%d errors during scenarios %q Generate", errs, s.name)
 		}
-
-		verb(1, "running %s\n", td)
-
 		cmd := exec.Command("go", "run", ".")
 		cmd.Dir = td
 		coutput, cerr := cmd.CombinedOutput()

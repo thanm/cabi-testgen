@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"math"
-	"math/rand"
 )
 
 // numparm describes a numeric parameter type; it implements the
@@ -70,8 +69,8 @@ func (p numparm) Declare(b *bytes.Buffer, prefix string, suffix string, caller b
 	b.WriteString(prefix + " " + t)
 }
 
-func (p numparm) genRandNum(value int) (string, int) {
-	which := uint8(rand.Intn(100))
+func (p numparm) genRandNum(s *genstate, value int) (string, int) {
+	which := uint8(s.wr.Intn(100))
 	if p.tag == "int" {
 		var v int
 		if which < 3 {
@@ -82,7 +81,7 @@ func (p numparm) genRandNum(value int) (string, int) {
 			// min
 			v = (-1 << (p.widthInBits - 1))
 		} else {
-			v = rand.Intn(1 << (p.widthInBits - 2))
+			v = s.wr.Intn(1 << (p.widthInBits - 2))
 			if value%2 != 0 {
 				v = -v
 			}
@@ -91,7 +90,7 @@ func (p numparm) genRandNum(value int) (string, int) {
 	}
 	if p.tag == "uint" || p.tag == "byte" {
 		nrange := 1 << (p.widthInBits - 2)
-		v := rand.Intn(nrange)
+		v := s.wr.Intn(nrange)
 		if p.tag == "byte" {
 			return fmt.Sprintf("%s(%d)", p.tag, v), value + 1
 		}
@@ -99,7 +98,7 @@ func (p numparm) genRandNum(value int) (string, int) {
 	}
 	if p.tag == "float" {
 		if p.widthInBits == 32 {
-			rf := rand.Float32() * (math.MaxFloat32 / 4)
+			rf := s.wr.Float32() * (math.MaxFloat32 / 4)
 			if value%2 != 0 {
 				rf = -rf
 			}
@@ -107,19 +106,19 @@ func (p numparm) genRandNum(value int) (string, int) {
 		}
 		if p.widthInBits == 64 {
 			return fmt.Sprintf("%s%d(%v)", p.tag, p.widthInBits,
-				rand.NormFloat64()), value + 1
+				s.wr.NormFloat64()), value + 1
 		}
 		panic("unknown float type")
 	}
 	if p.tag == "complex" {
 		if p.widthInBits == 64 {
-			f1, v2 := f32parm.genRandNum(value)
-			f2, v3 := f32parm.genRandNum(v2)
+			f1, v2 := f32parm.genRandNum(s, value)
+			f2, v3 := f32parm.genRandNum(s, v2)
 			return fmt.Sprintf("complex(%s,%s)", f1, f2), v3
 		}
 		if p.widthInBits == 128 {
-			f1, v2 := f64parm.genRandNum(value)
-			f2, v3 := f64parm.genRandNum(v2)
+			f1, v2 := f64parm.genRandNum(s, value)
+			f2, v3 := f64parm.genRandNum(s, v2)
 			return fmt.Sprintf("complex(%v,%v)", f1, f2), v3
 		}
 		panic("unknown complex type")
@@ -128,7 +127,7 @@ func (p numparm) genRandNum(value int) (string, int) {
 }
 
 func (p numparm) GenValue(s *genstate, value int, caller bool) (string, int) {
-	r, nv := p.genRandNum(value)
+	r, nv := p.genRandNum(s, value)
 	verb(5, "numparm.GenValue(%d) = %s", value, r)
 	return r, nv
 }

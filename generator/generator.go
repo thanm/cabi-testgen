@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"math/rand"
 	"os"
 	"strconv"
 	"strings"
@@ -258,6 +257,8 @@ type funcdef struct {
 	params     []parm
 	returns    []parm
 	values     []int
+	dodefc     uint8
+	dodefp     []uint8
 	rstack     int
 	recur      bool
 	method     bool
@@ -282,10 +283,11 @@ type genstate struct {
 	newgvars  []funcdesc
 	nfuncs    map[string]string
 	newnfuncs []funcdesc
+	wr        *wraprand
 }
 
 func (s *genstate) intFlavor() string {
-	which := uint8(rand.Intn(100))
+	which := uint8(s.wr.Intn(100))
 	if which < s.tunables.unsignedRanges[0] {
 		return "uint"
 	}
@@ -293,7 +295,7 @@ func (s *genstate) intFlavor() string {
 }
 
 func (s *genstate) intBits() uint32 {
-	which := uint8(rand.Intn(100))
+	which := uint8(s.wr.Intn(100))
 	var t uint8 = 0
 	var bits uint32 = 8
 	for _, v := range s.tunables.intBitRanges {
@@ -307,7 +309,7 @@ func (s *genstate) intBits() uint32 {
 }
 
 func (s *genstate) floatBits() uint32 {
-	which := uint8(rand.Intn(100))
+	which := uint8(s.wr.Intn(100))
 	if which < s.tunables.floatBitRanges[0] {
 		return uint32(32)
 	}
@@ -315,7 +317,7 @@ func (s *genstate) floatBits() uint32 {
 }
 
 func (s *genstate) genAddrTaken() addrTakenHow {
-	which := uint8(rand.Intn(100))
+	which := uint8(s.wr.Intn(100))
 	res := notAddrTaken
 	var t uint8 = 0
 	for _, v := range s.tunables.addrFractions {
@@ -371,7 +373,7 @@ func (s *genstate) GenParm(f *funcdef, depth int, mkctl bool, pidx int) parm {
 		tf[i] += off
 	}
 
-	isblank := uint8(rand.Intn(100)) < s.tunables.blankPerc
+	isblank := uint8(s.wr.Intn(100)) < s.tunables.blankPerc
 
 	addrTaken := notAddrTaken
 	if depth == 0 && tunables.takeAddress && !isblank {
@@ -379,7 +381,7 @@ func (s *genstate) GenParm(f *funcdef, depth int, mkctl bool, pidx int) parm {
 	}
 
 	// Make adjusted selection (pick a bucket within tf)
-	which := uint8(rand.Intn(amt)) + off
+	which := uint8(s.wr.Intn(amt)) + off
 	verb(3, "which=%d", which)
 	var retval parm
 	switch {
@@ -396,7 +398,7 @@ func (s *genstate) GenParm(f *funcdef, depth int, mkctl bool, pidx int) parm {
 				s.checkerPkg(pidx), f.idx, ns)
 			f.structdefs = append(f.structdefs, sp)
 			tnf := int(s.tunables.nStructFields) / int(depth+1)
-			nf := rand.Intn(tnf)
+			nf := s.wr.Intn(tnf)
 			for fi := 0; fi < nf; fi++ {
 				fp := s.GenParm(f, depth+1, false, pidx)
 				sp.fields = append(sp.fields, fp)
@@ -408,8 +410,8 @@ func (s *genstate) GenParm(f *funcdef, depth int, mkctl bool, pidx int) parm {
 		{
 			var ap arrayparm
 			ns := len(f.arraydefs)
-			nel := uint8(rand.Intn(int(s.tunables.nArrayElements)))
-			issl := uint8(rand.Intn(100)) < s.tunables.sliceFraction
+			nel := uint8(s.wr.Intn(int(s.tunables.nArrayElements)))
+			issl := uint8(s.wr.Intn(100)) < s.tunables.sliceFraction
 			ap.aname = fmt.Sprintf("ArrayF%dS%dE%d", f.idx, ns, nel)
 			ap.qname = fmt.Sprintf("%s.ArrayF%dS%dE%d", s.checkerPkg(pidx),
 				f.idx, ns, nel)
@@ -486,10 +488,10 @@ func (s *genstate) GenReturn(f *funcdef, depth int, pidx int) parm {
 func (s *genstate) GenFunc(fidx int, pidx int) *funcdef {
 	f := new(funcdef)
 	f.idx = fidx
-	numParams := rand.Intn(1 + int(s.tunables.nParmRange))
-	numReturns := rand.Intn(1 + int(s.tunables.nReturnRange))
-	f.recur = uint8(rand.Intn(100)) < s.tunables.recurPerc
-	f.method = uint8(rand.Intn(100)) < s.tunables.methodPerc
+	numParams := s.wr.Intn(1 + int(s.tunables.nParmRange))
+	numReturns := s.wr.Intn(1 + int(s.tunables.nReturnRange))
+	f.recur = uint8(s.wr.Intn(100)) < s.tunables.recurPerc
+	f.method = uint8(s.wr.Intn(100)) < s.tunables.methodPerc
 	if f.method {
 		// Receiver type can't be pointer type. Temporarily update
 		// tunables to eliminate that possibility.
@@ -504,7 +506,8 @@ func (s *genstate) GenFunc(fidx int, pidx int) *funcdef {
 		}
 	}
 	needControl := f.recur
-	pTaken := uint8(rand.Intn(100)) < s.tunables.takenFraction
+	f.dodefc = uint8(s.wr.Intn(100))
+	pTaken := uint8(s.wr.Intn(100)) < s.tunables.takenFraction
 	for pi := 0; pi < numParams; pi++ {
 		newparm := s.GenParm(f, 0, needControl, pidx)
 		if !pTaken {
@@ -514,12 +517,13 @@ func (s *genstate) GenFunc(fidx int, pidx int) *funcdef {
 			needControl = false
 		}
 		f.params = append(f.params, newparm)
+		f.dodefp = append(f.dodefp, uint8(s.wr.Intn(100)))
 	}
 	if f.recur && needControl {
 		f.recur = false
 	}
 
-	rTaken := uint8(rand.Intn(100)) < s.tunables.takenFraction
+	rTaken := uint8(s.wr.Intn(100)) < s.tunables.takenFraction
 	for ri := 0; ri < numReturns; ri++ {
 		r := s.GenReturn(f, 0, pidx)
 		if !rTaken {
@@ -527,7 +531,7 @@ func (s *genstate) GenFunc(fidx int, pidx int) *funcdef {
 		}
 		f.returns = append(f.returns, r)
 	}
-	spw := uint(rand.Intn(11))
+	spw := uint(s.wr.Intn(11))
 	rstack := 1 << spw
 	if rstack < 4 {
 		rstack = 4
@@ -611,7 +615,6 @@ func emitStructAndArrayDefs(f *funcdef, b *bytes.Buffer) {
 		b.WriteString(fmt.Sprintf("type %s %s\n\n", td.aname,
 			td.target.TypeName()))
 	}
-
 }
 
 func (s *genstate) emitCaller(f *funcdef, b *bytes.Buffer, pidx int) {
@@ -755,7 +758,7 @@ func (s *genstate) emitCaller(f *funcdef, b *bytes.Buffer, pidx int) {
 		b.WriteString("}\n")
 	}
 
-	b.WriteString(fmt.Sprintf("  %s.EndFcn()\n", s.utilsPkg()))
+	b.WriteString(fmt.Sprintf("\n  %s.EndFcn()\n", s.utilsPkg()))
 
 	b.WriteString("}\n\n")
 }
@@ -1035,14 +1038,14 @@ func (s *genstate) emitParamChecks(f *funcdef, b *bytes.Buffer, pidx int, value 
 	}
 
 	// receiver value check
-	if f.method && !f.receiver.IsBlank() {
+	if f.method {
 		numel := f.receiver.NumElements()
 		for i := 0; i < numel; i++ {
 			var valstr string
 			verb(4, "emitting check-code for rcvr el %d value=%d", i, value)
 			elref, elparm := f.receiver.GenElemRef(i, "rcvr")
 			valstr, value = elparm.GenValue(s, value, false)
-			if elref == "" || strings.HasPrefix(elref, "_") {
+			if elref == "" || strings.HasPrefix(elref, "_") || f.receiver.IsBlank() {
 				verb(4, "empty skip rcvr el %d", i)
 				continue
 			} else {
@@ -1069,8 +1072,9 @@ func (s *genstate) emitParamChecks(f *funcdef, b *bytes.Buffer, pidx int, value 
 //       check param
 //     }(...)
 //
-// where we randomly choose to either pass a param through to the function literal,
-// or have the param captured by the closure, then check its value in the defer.
+// where we randomly choose to either pass a param through to the
+// function literal, or have the param captured by the closure, then
+// check its value in the defer.
 func (s *genstate) emitDeferChecks(f *funcdef, b *bytes.Buffer, pidx int, value int) int {
 
 	if len(f.params) == 0 {
@@ -1079,8 +1083,8 @@ func (s *genstate) emitDeferChecks(f *funcdef, b *bytes.Buffer, pidx int, value 
 
 	// make a pass through the params and randomly decide which will be passed into the func.
 	passed := []bool{}
-	for range f.params {
-		p := rand.Intn(100) < 50
+	for i := range f.params {
+		p := f.dodefp[i] < 50
 		passed = append(passed, p)
 	}
 
@@ -1229,7 +1233,7 @@ func (s *genstate) emitChecker(f *funcdef, b *bytes.Buffer, pidx int, emit bool)
 	value, haveControl = s.emitParamChecks(f, b, pidx, value)
 
 	// defer testing
-	if s.tunables.doDefer && uint8(rand.Intn(100)) < s.tunables.deferFraction {
+	if s.tunables.doDefer && f.dodefc < s.tunables.deferFraction {
 		_ = s.emitDeferChecks(f, b, pidx, value)
 	}
 
@@ -1363,10 +1367,14 @@ func (s *genstate) GenPair(calloutfile *os.File, checkoutfile *os.File, fidx int
 	s.tunables = tunables
 
 	// Generate a function with a random number of params and returns
+	s.wr = NewWrapRand(seed)
+	s.wr.tag = "genfunc"
 	fp := s.GenFunc(fidx, pidx)
 
 	// Emit caller side
-	rand.Seed(seed)
+	wrcaller := NewWrapRand(seed)
+	s.wr = wrcaller
+	s.wr.tag = "caller"
 	s.emitCaller(fp, b, pidx)
 	if emit {
 		b.WriteTo(calloutfile)
@@ -1374,12 +1382,15 @@ func (s *genstate) GenPair(calloutfile *os.File, checkoutfile *os.File, fidx int
 	b.Reset()
 
 	// Emit checker side
-	rand.Seed(seed)
+	wrchecker := NewWrapRand(seed)
+	s.wr = wrchecker
+	s.wr.tag = "checker"
 	s.emitChecker(fp, b, pidx, emit)
 	if emit {
 		b.WriteTo(checkoutfile)
 	}
 	b.Reset()
+	wrchecker.Check(wrcaller)
 
 	return seed + 1
 }

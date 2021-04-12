@@ -3,7 +3,6 @@ package generator
 import (
 	"bytes"
 	"fmt"
-	"math/rand"
 )
 
 // typedefparm describes a parameter that is a typedef of some other
@@ -78,7 +77,7 @@ func (s *genstate) makeTypedefParm(f *funcdef, target parm, pidx int) parm {
 	tdp.aname = fmt.Sprintf("MyTypeF%dS%d", f.idx, ns)
 	tdp.qname = fmt.Sprintf("%s.MyTypeF%dS%d", s.checkerPkg(pidx), f.idx, ns)
 	tdp.target = target
-	tdp.SetBlank(uint8(rand.Intn(100)) < tunables.blankPerc)
+	tdp.SetBlank(uint8(s.wr.Intn(100)) < tunables.blankPerc)
 	f.typedefs = append(f.typedefs, tdp)
 	return &tdp
 }
