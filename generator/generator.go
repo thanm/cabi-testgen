@@ -616,7 +616,7 @@ func emitStructAndArrayDefs(f *funcdef, b *bytes.Buffer) {
 
 func (s *genstate) emitCaller(f *funcdef, b *bytes.Buffer, pidx int) {
 
-	b.WriteString(fmt.Sprintf("func Caller%d() {\n", f.idx))
+	b.WriteString(fmt.Sprintf("func Caller%d(mode string) {\n", f.idx))
 
 	b.WriteString(fmt.Sprintf("  %s.BeginFcn()\n", s.utilsPkg()))
 
@@ -658,6 +658,7 @@ func (s *genstate) emitCaller(f *funcdef, b *bytes.Buffer, pidx int) {
 	if s.sforce {
 		b.WriteString("  hackStack() // force stack growth on next call\n")
 	}
+	b.WriteString("  if mode == \"normal\" {\n")
 	b.WriteString("  ")
 	for ri := range f.returns {
 		writeCom(b, ri)
@@ -700,8 +701,9 @@ func (s *genstate) emitCaller(f *funcdef, b *bytes.Buffer, pidx int) {
 		b.WriteString(fmt.Sprintf("    %s.NoteFailure(%d, %d, %d, \"%s\", \"return\", %d, true, uint64(0))\n", s.utilsPkg(), cm, pidx, f.idx, s.checkerPkg(pidx), ri))
 		b.WriteString("  }\n")
 	}
-
+	b.WriteString("  }")
 	if s.tunables.doReflectCall {
+		b.WriteString("else {\n")
 		// now make the same call via reflection
 		b.WriteString("  // same call via reflection\n")
 		b.WriteString(fmt.Sprintf("  %s.Mode = \"reflect\"\n", s.utilsPkg()))
@@ -747,9 +749,10 @@ func (s *genstate) emitCaller(f *funcdef, b *bytes.Buffer, pidx int) {
 			} else {
 				b.WriteString(fmt.Sprintf("  if %s%srr%dv != %sc%d {\n", pfc, star, ri, star, ri))
 			}
-			b.WriteString(fmt.Sprintf("    %s.NoteFailure(%d, %d, %d, \"%s\", \"return\", %d, true, uint64(0))\n", s.utilsPkg(), cm, pidx, f.idx, s.checkerPkg(pidx), ri))
+			b.WriteString(fmt.Sprintf("    %s.NoteFailure(%d, %d, %d, \"%s\", \"reflect return\", %d, true, uint64(0))\n", s.utilsPkg(), cm, pidx, f.idx, s.checkerPkg(pidx), ri))
 			b.WriteString("  }\n")
 		}
+		b.WriteString("}\n")
 	}
 
 	b.WriteString(fmt.Sprintf("  %s.EndFcn()\n", s.utilsPkg()))
@@ -1467,7 +1470,10 @@ func (s *genstate) emitMain(outf *os.File, numit int, fcnmask map[int]int, pkmas
 		cp := fmt.Sprintf("%sCaller%d", s.tag, k)
 		for i := 0; i < numit; i++ {
 			if emitFP(i, k, fcnmask, pkmask) {
-				fmt.Fprintf(outf, "  %s.Caller%d()\n", cp, i)
+				fmt.Fprintf(outf, "  %s.Caller%d(\"normal\")\n", cp, i)
+				if s.tunables.doReflectCall {
+					fmt.Fprintf(outf, "  %s.Caller%d(\"reflect\")\n", cp, i)
+				}
 			}
 		}
 	}

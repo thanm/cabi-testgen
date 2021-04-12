@@ -1,12 +1,12 @@
-#!/bin/sh
+!/bin/sh
 #
 # Simple test script for performing a series of test runs.
 #
 DOMINIMIZE=no
 DOMINIMIZE=yes
 GEX=
-GEX=regabi,regabireflect,regabiargs
 GEX=regabi,regabiargs
+GEX=regabi,regabireflect,regabiargs
 echo export GOEXPERIMENT=$GEX
 export GOEXPERIMENT=$GEX
 HOWMANY=$1
@@ -37,7 +37,7 @@ function cleanUnused() {
 SEED=`seconds.py`
 HERE=`pwd`
 PRAG=""
-PRAG="-pragma registerparams -method=1 -reflect=0 -maxfail=9999"
+PRAG="-pragma registerparams -method=1 -reflect=1 -maxfail=9999"
 NP=100
 NF=20
 while [ $ITER !=  0 ]; do
@@ -64,6 +64,7 @@ while [ $ITER !=  0 ]; do
   BADF=unset
   cd $D
   rm -f cabiTest
+  echo "... building"
   go build . 1> ${HERE}/build.err.txt 2>&1
   if [ $? != 0 ]; then
     echo "*** building generated code failed, SEED=$SEED see build.err.txt"
@@ -136,6 +137,7 @@ while [ $ITER !=  0 ]; do
     fi
     exit 1
   fi
+  echo "... running"
   ./cabiTest 1> ${HERE}/run.err.txt 2>&1
   if [ $? != 0 ]; then
     cd $HERE
