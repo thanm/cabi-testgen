@@ -103,8 +103,8 @@ func TestExhaustive(t *testing.T) {
 	if err != nil {
 		t.Errorf("can't create temp dir")
 	}
-	//defer os.RemoveAll(td)
-	println("=-= td is ", td)
+	defer os.RemoveAll(td)
+	//println("=-= td is ", td)
 
 	verb(1, "generating into temp dir %s", td)
 
