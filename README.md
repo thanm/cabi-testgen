@@ -161,11 +161,9 @@ Run the generator with "-help" for a complete list of options.
 No support yet for variadic functions.
 
 The set of generated types is still a bit thin; it doesn't yet include
-interfaces, maps, or channels.
+interfaces (at least not explicitly) or channels.
 
 Todos:
-
-- add support for methods with a pointer receiver 
 
 - add interface values
 

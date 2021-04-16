@@ -8,11 +8,9 @@ import (
 	"strings"
 )
 
-const debug = false
-
-func NewWrapRand(seed int64) *wraprand {
+func NewWrapRand(seed int64, debug bool) *wraprand {
 	rand.Seed(seed)
-	return &wraprand{seed: seed}
+	return &wraprand{seed: seed, debug: debug}
 }
 
 type wraprand struct {
@@ -22,6 +20,7 @@ type wraprand struct {
 	seed      int64
 	tag       string
 	calls     []string
+	debug     bool
 }
 
 func (w *wraprand) captureCall(tag string) {
@@ -48,7 +47,7 @@ func (w *wraprand) captureCall(tag string) {
 }
 
 func (w *wraprand) Intn(n int) int {
-	if debug {
+	if w.debug {
 		w.captureCall("Intn")
 	}
 	w.intncalls++
@@ -56,7 +55,7 @@ func (w *wraprand) Intn(n int) int {
 }
 
 func (w *wraprand) Float32() float32 {
-	if debug {
+	if w.debug {
 		w.captureCall("Float32")
 	}
 	w.f32calls++
@@ -64,7 +63,7 @@ func (w *wraprand) Float32() float32 {
 }
 
 func (w *wraprand) NormFloat64() float64 {
-	if debug {
+	if w.debug {
 		w.captureCall("NormFloat64")
 	}
 	w.f64calls++
@@ -103,7 +102,7 @@ func (w *wraprand) Check(w2 *wraprand) {
 			w.f32calls, w.f64calls, w.intncalls)
 		fmt.Fprintf(os.Stderr, " %s: {f32:%d f64:%d i:%d}\n", t2,
 			w2.f32calls, w2.f64calls, w2.intncalls)
-		if debug {
+		if w.debug {
 			f := fmt.Sprintf("/tmp/%s.txt", t)
 			f2 := fmt.Sprintf("/tmp/%s.txt", t2)
 			w.emitCalls(f)
@@ -112,4 +111,8 @@ func (w *wraprand) Check(w2 *wraprand) {
 		}
 		panic("bad")
 	}
+}
+
+func (w *wraprand) Checkpoint(tag string) {
+	w.calls = append(w.calls, "=-=\n"+tag+"\n=-=\n")
 }

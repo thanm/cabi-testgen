@@ -35,7 +35,8 @@ var inlimitflag = flag.Int("inmax", -1, "Max number of input params.")
 var outlimitflag = flag.Int("outmax", -1, "Max number of input params.")
 var pragmaflag = flag.String("pragma", "", "Tag generated test routines with pragma //go:<value>.")
 var maxfailflag = flag.Int("maxfail", 10, "Maximum runtime failures before test self-terminates")
-var stackforceflag = flag.Bool("forcestackgrowth", false, "Use hooks to force stack growth.")
+var stackforceflag = flag.Bool("forcestackgrowth", true, "Use hooks to force stack growth.")
+var tracerandflag = flag.Bool("tracerand", false, "Better tracing for rand usage")
 
 // for testcase minimization
 var utilsinlineflag = flag.Bool("inlutils", false, "Emit inline utils code (for minimization)")
@@ -142,7 +143,8 @@ func main() {
 	setupTunables()
 	errs := generator.Generate(*tagflag, *outdirflag, *pkgpathflag,
 		*numitflag, *numtpkflag, *seedflag, *pragmaflag,
-		fcnmask, pkmask, *utilsinlineflag, *maxfailflag, *stackforceflag)
+		fcnmask, pkmask, *utilsinlineflag, *maxfailflag, *stackforceflag,
+		*tracerandflag)
 	if errs != 0 {
 		log.Fatal("errors during generation")
 	}

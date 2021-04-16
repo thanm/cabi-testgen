@@ -45,10 +45,10 @@ type TunableParams struct {
 	structDepth uint8
 
 	// Fraction of param and return types assigned to each of:
-	// struct/array/int/float/complex/byte/pointer/string at the
+	// struct/array/map/pointer/int/float/complex/byte/string at the
 	// top level. If nesting precludes using a struct, other types
 	// are chosen from instead according to same proportions.
-	typeFractions [8]uint8
+	typeFractions [9]uint8
 
 	// Percentage of the time we'll emit recursive calls, from 0 to 100.
 	recurPerc uint8
@@ -85,27 +85,45 @@ type TunableParams struct {
 	deferFraction uint8
 }
 
+var defaultTypeFractions = [9]uint8{
+	10, // struct
+	10, // array
+	10, // map
+	15, // pointer
+	20, // numeric
+	15, // float
+	5,  // complex
+	5,  // byte
+	10, // string
+}
+
+type typeFractionIndex uint8
+
+const (
+	// Param not address taken.
+	StructTfIdx = iota
+	ArrayTfIdx
+	MapTfIdx
+	PointerTfIdx
+	NumericTfIdx
+	FloatTfIdx
+	ComplexTfIdx
+	ByteTfIdx
+	StringTfIdx
+)
+
 var tunables = TunableParams{
-	nParmRange:     15,
-	nReturnRange:   7,
-	nStructFields:  7,
-	nArrayElements: 5,
-	sliceFraction:  50,
-	intBitRanges:   [4]uint8{30, 20, 20, 30},
-	floatBitRanges: [2]uint8{50, 50},
-	unsignedRanges: [2]uint8{50, 50},
-	blankPerc:      15,
-	structDepth:    3,
-	typeFractions: [8]uint8{
-		20, // struct
-		15, // array
-		25, // numeric
-		15, // float
-		5,  // complex
-		5,  // byte
-		5,  // pointer
-		10, // string
-	},
+	nParmRange:            15,
+	nReturnRange:          7,
+	nStructFields:         7,
+	nArrayElements:        5,
+	sliceFraction:         50,
+	intBitRanges:          [4]uint8{30, 20, 20, 30},
+	floatBitRanges:        [2]uint8{50, 50},
+	unsignedRanges:        [2]uint8{50, 50},
+	blankPerc:             15,
+	structDepth:           3,
+	typeFractions:         defaultTypeFractions,
 	recurPerc:             20,
 	methodPerc:            10,
 	pointerMethodCallPerc: 50,
@@ -165,7 +183,7 @@ func checkTunables(t TunableParams) {
 		s += int(v)
 	}
 	if s != 100 {
-		log.Fatal(errors.New("typeFractions tunable does not sum to 100"))
+		panic(errors.New("typeFractions tunable does not sum to 100"))
 	}
 
 	s = 0
@@ -249,19 +267,23 @@ func verb(vlevel int, s string, a ...interface{}) {
 }
 
 type funcdef struct {
-	idx        int
-	structdefs []structparm
-	arraydefs  []arrayparm
-	typedefs   []typedefparm
-	receiver   parm
-	params     []parm
-	returns    []parm
-	values     []int
-	dodefc     uint8
-	dodefp     []uint8
-	rstack     int
-	recur      bool
-	method     bool
+	idx         int
+	structdefs  []structparm
+	arraydefs   []arrayparm
+	typedefs    []typedefparm
+	mapdefs     []mapparm
+	mapkeytypes []parm
+	mapkeytmps  []string
+	mapkeyts    string
+	receiver    parm
+	params      []parm
+	returns     []parm
+	values      []int
+	dodefc      uint8
+	dodefp      []uint8
+	rstack      int
+	recur       bool
+	method      bool
 }
 
 type genstate struct {
@@ -273,6 +295,7 @@ type genstate struct {
 	errs      int
 	pragma    string
 	sforce    bool
+	tracerand bool
 	tunables  TunableParams
 	tstack    []TunableParams
 	pfuncs    map[string]string
@@ -342,55 +365,109 @@ func (s *genstate) popTunables() {
 	s.tstack = s.tstack[1:]
 }
 
-func (s *genstate) precludePointerTypes() {
-	s.tunables.typeFractions[0] += s.tunables.typeFractions[6]
-	s.tunables.typeFractions[6] = 0
+func (s *genstate) dumpTypeFraction(tag string) {
+	fmt.Fprintf(os.Stderr, "type fractions at %s:\n", tag)
+	sum := uint8(0)
+	d := func(sl int, tag string) {
+		amt := s.tunables.typeFractions[sl]
+		sum += amt
+		fmt.Fprintf(os.Stderr, "%10s: %d\n", tag, amt)
+	}
+	d(StructTfIdx, "struct")
+	d(ArrayTfIdx, "array")
+	d(MapTfIdx, "map")
+	d(PointerTfIdx, "pointer")
+	d(NumericTfIdx, "numeric")
+	d(FloatTfIdx, "float")
+	d(ComplexTfIdx, "complex")
+	d(ByteTfIdx, "byte")
+	d(StringTfIdx, "string")
+	fmt.Fprintf(os.Stderr, "sum: %d\n", sum)
+}
+
+func (s *genstate) redistributeFraction(f uint8, avoid []int) {
+	inavoid := func(j int) bool {
+		for _, k := range avoid {
+			if j == k {
+				return true
+			}
+		}
+		return false
+	}
+
+	doredis := func() {
+		for {
+			for i := range s.tunables.typeFractions {
+				if inavoid(i) {
+					continue
+				}
+				s.tunables.typeFractions[i]++
+				f--
+				if f == 0 {
+					return
+				}
+			}
+		}
+	}
+	doredis()
 	checkTunables(s.tunables)
+}
+
+func (s *genstate) precludeSelectedTypes(t int, t2 ...int) {
+	avoid := []int{t}
+	avoid = append(avoid, t2...)
+	f := uint8(0)
+	for _, idx := range avoid {
+		f += s.tunables.typeFractions[idx]
+		s.tunables.typeFractions[idx] = 0
+	}
+	s.redistributeFraction(f, avoid)
+}
+
+func (s *genstate) GenMapKeyType(f *funcdef, depth int, pidx int) parm {
+	s.pushTunables()
+	defer s.popTunables()
+	// maps we can't allow at all; pointers might be possible but
+	//  would be too much work to arrange. Avoid slices as well.
+	s.tunables.sliceFraction = 0
+	s.precludeSelectedTypes(MapTfIdx, PointerTfIdx)
+	return s.GenParm(f, depth+1, false, pidx)
 }
 
 func (s *genstate) GenParm(f *funcdef, depth int, mkctl bool, pidx int) parm {
 
-	// Enforcement for struct or array nesting depth (zeros tf[0] and
-	// tf[1])
-	tf := s.tunables.typeFractions
-	amt := 100
-	off := uint8(0)
+	// Enforcement for struct/array/map/pointer array nesting depth.
 	toodeep := depth >= int(s.tunables.structDepth)
 	if toodeep {
-		off = tf[0] + tf[1]
-		amt -= int(off)
-		tf[0] = 0
-		tf[1] = 0
+		s.pushTunables()
+		defer s.popTunables()
+		s.precludeSelectedTypes(StructTfIdx, ArrayTfIdx, MapTfIdx, PointerTfIdx)
 	}
 
 	// Convert tf into a cumulative sum
+	tf := s.tunables.typeFractions
 	sum := uint8(0)
 	for i := 0; i < len(tf); i++ {
 		sum += tf[i]
 		tf[i] = sum
 	}
-	for i := 2; i < len(tf); i++ {
-		tf[i] += off
-	}
 
 	isblank := uint8(s.wr.Intn(100)) < s.tunables.blankPerc
-
 	addrTaken := notAddrTaken
 	if depth == 0 && tunables.takeAddress && !isblank {
 		addrTaken = s.genAddrTaken()
 	}
 
 	// Make adjusted selection (pick a bucket within tf)
-	which := uint8(s.wr.Intn(amt)) + off
+	which := uint8(s.wr.Intn(100))
 	verb(3, "which=%d", which)
 	var retval parm
 	switch {
-	case which < tf[0]:
+	case which < tf[StructTfIdx]:
 		{
 			if toodeep {
 				panic("should not be here")
 			}
-
 			var sp structparm
 			ns := len(f.structdefs)
 			sp.sname = fmt.Sprintf("StructF%dS%d", f.idx, ns)
@@ -406,8 +483,11 @@ func (s *genstate) GenParm(f *funcdef, depth int, mkctl bool, pidx int) parm {
 			f.structdefs[ns] = sp
 			retval = &sp
 		}
-	case which < tf[1]:
+	case which < tf[ArrayTfIdx]:
 		{
+			if toodeep {
+				panic("should not be here")
+			}
 			var ap arrayparm
 			ns := len(f.arraydefs)
 			nel := uint8(s.wr.Intn(int(s.tunables.nArrayElements)))
@@ -423,7 +503,46 @@ func (s *genstate) GenParm(f *funcdef, depth int, mkctl bool, pidx int) parm {
 			f.arraydefs[ns] = ap
 			retval = &ap
 		}
-	case which < tf[2]:
+	case which < tf[MapTfIdx]:
+		{
+			if toodeep {
+				panic("should not be here")
+			}
+			var mp mapparm
+			ns := len(f.mapdefs)
+
+			// append early, since calls below might also append
+			f.mapdefs = append(f.mapdefs, mp)
+			f.mapkeytmps = append(f.mapkeytmps, "")
+			f.mapkeytypes = append(f.mapkeytypes, mp.keytype)
+			mp.aname = fmt.Sprintf("MapF%dM%d", f.idx, ns)
+			if f.mapkeyts == "" {
+				f.mapkeyts = fmt.Sprintf("MapKeysF%d", f.idx)
+			}
+			mp.qname = fmt.Sprintf("%s.MapF%dM%d", s.checkerPkg(pidx),
+				f.idx, ns)
+			mkt := fmt.Sprintf("Mk%dt%d", f.idx, ns)
+			mp.keytmp = mkt
+			mk := s.GenMapKeyType(f, depth+1, pidx)
+			mp.keytype = mk
+			mp.valtype = s.GenParm(f, depth+1, false, pidx)
+			mp.valtype.SetBlank(false)
+			mp.keytype.SetBlank(false)
+			// now update the previously appended placeholders
+			f.mapdefs[ns] = mp
+			f.mapkeytypes[ns] = mk
+			f.mapkeytmps[ns] = mkt
+			retval = &mp
+		}
+	case which < tf[PointerTfIdx]:
+		{
+			if toodeep {
+				panic("should not be here")
+			}
+			pp := mkPointerParm(s.GenParm(f, depth+1, false, pidx))
+			retval = &pp
+		}
+	case which < tf[NumericTfIdx]:
 		{
 			var ip numparm
 			ip.tag = s.intFlavor()
@@ -433,33 +552,28 @@ func (s *genstate) GenParm(f *funcdef, depth int, mkctl bool, pidx int) parm {
 			}
 			retval = &ip
 		}
-	case which < tf[3]:
+	case which < tf[FloatTfIdx]:
 		{
 			var fp numparm
 			fp.tag = "float"
 			fp.widthInBits = s.floatBits()
 			retval = &fp
 		}
-	case which < tf[4]:
+	case which < tf[ComplexTfIdx]:
 		{
 			var fp numparm
 			fp.tag = "complex"
 			fp.widthInBits = s.floatBits() * 2
 			retval = &fp
 		}
-	case which < tf[5]:
+	case which < tf[ByteTfIdx]:
 		{
 			var bp numparm
 			bp.tag = "byte"
 			bp.widthInBits = 8
 			retval = &bp
 		}
-	case which < tf[6]:
-		{
-			pp := mkPointerParm(s.GenParm(f, depth+1, false, pidx))
-			retval = &pp
-		}
-	case which < tf[7]:
+	case which < tf[StringTfIdx]:
 		{
 			var sp stringparm
 			sp.tag = "string"
@@ -496,7 +610,7 @@ func (s *genstate) GenFunc(fidx int, pidx int) *funcdef {
 		// Receiver type can't be pointer type. Temporarily update
 		// tunables to eliminate that possibility.
 		s.pushTunables()
-		s.precludePointerTypes()
+		s.precludeSelectedTypes(PointerTfIdx)
 		target := s.GenParm(f, 0, false, pidx)
 		target.SetBlank(false)
 		s.popTunables()
@@ -553,7 +667,17 @@ func genDeref(p parm) (parm, string) {
 	}
 }
 
-func emitCompareFunc(b *bytes.Buffer, p parm) {
+func (s *genstate) eqFuncRef(f *funcdef, t parm, caller bool) string {
+	cp := ""
+	if f.mapkeyts != "" {
+		cp = "mkt."
+	} else if caller {
+		cp = s.checkerPkg(s.pkidx) + "."
+	}
+	return cp + "Equal" + t.TypeName()
+}
+
+func (s *genstate) emitCompareFunc(f *funcdef, b *bytes.Buffer, p parm) {
 	if !p.HasPointer() {
 		return
 	}
@@ -561,7 +685,11 @@ func emitCompareFunc(b *bytes.Buffer, p parm) {
 	tn := p.TypeName()
 	b.WriteString(fmt.Sprintf("// equal func for %s\n", tn))
 	b.WriteString("//go:noinline\n")
-	b.WriteString(fmt.Sprintf("func Equal%s(left %s, right %s) bool {\n", tn, tn, tn))
+	rcvr := ""
+	if f.mapkeyts != "" {
+		rcvr = fmt.Sprintf("(mkt *%s) ", f.mapkeyts)
+	}
+	b.WriteString(fmt.Sprintf("func %sEqual%s(left %s, right %s) bool {\n", rcvr, tn, tn, tn))
 	b.WriteString("  return ")
 	numel := p.NumElements()
 	ncmp := 0
@@ -581,8 +709,8 @@ func emitCompareFunc(b *bytes.Buffer, p parm) {
 		}
 		ncmp++
 		if basep.HasPointer() {
-			efn := "Equal" + basep.TypeName()
-			b.WriteString(fmt.Sprintf("  %s(%s%s, %s%s)", efn, star, lelref, star, relref))
+			efn := s.eqFuncRef(f, basep, false)
+			b.WriteString(fmt.Sprintf(" %s(%s%s, %s%s)", efn, star, lelref, star, relref))
 		} else {
 			b.WriteString(fmt.Sprintf("%s%s == %s%s", star, lelref, star, relref))
 		}
@@ -593,14 +721,14 @@ func emitCompareFunc(b *bytes.Buffer, p parm) {
 	b.WriteString("\n}\n\n")
 }
 
-func emitStructAndArrayDefs(f *funcdef, b *bytes.Buffer) {
-	for _, s := range f.structdefs {
-		b.WriteString(fmt.Sprintf("type %s struct {\n", s.sname))
-		for fi, sp := range s.fields {
-			sp.Declare(b, s.FieldName(fi), "\n", false)
+func (s *genstate) emitStructAndArrayDefs(f *funcdef, b *bytes.Buffer) {
+	for _, str := range f.structdefs {
+		b.WriteString(fmt.Sprintf("type %s struct {\n", str.sname))
+		for fi, sp := range str.fields {
+			sp.Declare(b, "  "+str.FieldName(fi), "\n", false)
 		}
 		b.WriteString("}\n\n")
-		emitCompareFunc(b, &s)
+		s.emitCompareFunc(f, b, &str)
 	}
 	for _, a := range f.arraydefs {
 		elems := fmt.Sprintf("%d", a.nelements)
@@ -609,12 +737,45 @@ func emitStructAndArrayDefs(f *funcdef, b *bytes.Buffer) {
 		}
 		b.WriteString(fmt.Sprintf("type %s [%s]%s\n\n", a.aname,
 			elems, a.eltype.TypeName()))
-		emitCompareFunc(b, &a)
+		s.emitCompareFunc(f, b, &a)
+	}
+	for _, a := range f.mapdefs {
+		b.WriteString(fmt.Sprintf("type %s map[%s]%s\n\n", a.aname,
+			a.keytype.TypeName(), a.valtype.TypeName()))
+		s.emitCompareFunc(f, b, &a)
 	}
 	for _, td := range f.typedefs {
 		b.WriteString(fmt.Sprintf("type %s %s\n\n", td.aname,
 			td.target.TypeName()))
+		s.emitCompareFunc(f, b, &td)
 	}
+	if f.mapkeyts != "" {
+		b.WriteString(fmt.Sprintf("type %s struct {\n", f.mapkeyts))
+		for i := range f.mapkeytypes {
+			f.mapkeytypes[i].Declare(b, "  "+f.mapkeytmps[i], "\n", false)
+		}
+		b.WriteString("}\n\n")
+	}
+}
+
+func (s *genstate) emitMapKeyTmps(f *funcdef, b *bytes.Buffer, pidx int, value int, caller bool) int {
+	if f.mapkeyts == "" {
+		return value
+	}
+	// map key tmps
+	cp := ""
+	if caller {
+		cp = s.checkerPkg(pidx) + "."
+	}
+	b.WriteString("  var mkt " + cp + f.mapkeyts + "\n")
+	for i, t := range f.mapkeytypes {
+		var keystr string
+		keystr, value = t.GenValue(s, value, caller)
+		tname := f.mapkeytmps[i]
+		b.WriteString(fmt.Sprintf("  %s := %s\n", tname, keystr))
+		b.WriteString(fmt.Sprintf("  mkt.%s = %s\n", tname, tname))
+	}
+	return value
 }
 
 func (s *genstate) emitCaller(f *funcdef, b *bytes.Buffer, pidx int) {
@@ -623,30 +784,35 @@ func (s *genstate) emitCaller(f *funcdef, b *bytes.Buffer, pidx int) {
 
 	b.WriteString(fmt.Sprintf("  %s.BeginFcn()\n", s.utilsPkg()))
 
-	// generate return constants
 	var value int = 1
+
+	s.wr.Checkpoint("before mapkeytmps")
+	value = s.emitMapKeyTmps(f, b, pidx, value, true)
+
+	// generate return constants
+	s.wr.Checkpoint("before return constants")
 	for ri, r := range f.returns {
-		var valstr string
-		valstr, value = r.GenValue(s, value, true)
-		b.WriteString(fmt.Sprintf("  c%d := %s\n", ri, valstr))
+		rc := fmt.Sprintf("c%d", ri)
+		value = s.emitVarAssign(f, b, r, rc, value, true)
 	}
 
 	// generate param constants
+	s.wr.Checkpoint("before param constants")
 	for pi, p := range f.params {
 		verb(4, "emitCaller gen p%d value=%d", pi, value)
-		p.Declare(b, fmt.Sprintf("  var p%d", pi), "\n", true)
-		var valstr string
 		if p.IsControl() {
-			valstr = "10"
+			_ = uint8(s.wr.Intn(100)) < 50
+			p.Declare(b, fmt.Sprintf("  var p%d ", pi), " = 10\n", true)
 		} else {
-			valstr, value = p.GenValue(s, value, true)
+			pc := fmt.Sprintf("p%d", pi)
+			value = s.emitVarAssign(f, b, p, pc, value, true)
 		}
-		b.WriteString(fmt.Sprintf("  p%d = %s\n", pi, valstr))
 		f.values = append(f.values, value)
 	}
 
 	// generate receiver constant if applicable
 	if f.method {
+		s.wr.Checkpoint("before receiver constant")
 		f.receiver.Declare(b, "  var rcvr", "\n", true)
 		valstr, value := f.receiver.GenValue(s, value, true)
 		b.WriteString(fmt.Sprintf("  rcvr = %s\n", valstr))
@@ -696,7 +862,7 @@ func (s *genstate) emitCaller(f *funcdef, b *bytes.Buffer, pidx int) {
 			pfc = fmt.Sprintf("%s.ParamFailCount == 0 && ", s.utilsPkg())
 		}
 		if curp.HasPointer() {
-			efn := "!" + s.checkerPkg(pidx) + ".Equal" + curp.TypeName()
+			efn := "!" + s.eqFuncRef(f, curp, true)
 			b.WriteString(fmt.Sprintf("  if %s%s(%sr%d, %sc%d) {\n", pfc, efn, star, ri, star, ri))
 		} else {
 			b.WriteString(fmt.Sprintf("  if %s%sr%d != %sc%d {\n", pfc, star, ri, star, ri))
@@ -747,7 +913,7 @@ func (s *genstate) emitCaller(f *funcdef, b *bytes.Buffer, pidx int) {
 				pfc = fmt.Sprintf("%s.ParamFailCount == 0 && ", s.utilsPkg())
 			}
 			if curp.HasPointer() {
-				efn := "!" + s.checkerPkg(pidx) + ".Equal" + curp.TypeName()
+				efn := "!" + s.eqFuncRef(f, curp, true)
 				b.WriteString(fmt.Sprintf("  if %s%s(%srr%dv, %sc%d) {\n", pfc, efn, star, ri, star, ri))
 			} else {
 				b.WriteString(fmt.Sprintf("  if %s%srr%dv != %sc%d {\n", pfc, star, ri, star, ri))
@@ -793,8 +959,10 @@ type funcdesc struct {
 }
 
 func (s *genstate) emitDerefFuncs(b *bytes.Buffer, emit bool) {
+	b.WriteString("// dereference helpers\n")
 	for _, fd := range s.newpfuncs {
 		if !emit {
+			b.WriteString(fmt.Sprintf("\n// skip derefunc %s\n", fd.name))
 			delete(s.pfuncs, fd.tag)
 			continue
 		}
@@ -811,8 +979,10 @@ func (s *genstate) emitDerefFuncs(b *bytes.Buffer, emit bool) {
 }
 
 func (s *genstate) emitAssignFuncs(b *bytes.Buffer, emit bool) {
+	b.WriteString("// assign helpers\n")
 	for _, fd := range s.newrfuncs {
 		if !emit {
+			b.WriteString(fmt.Sprintf("\n// skip assignfunc %s\n", fd.name))
 			delete(s.rfuncs, fd.tag)
 			continue
 		}
@@ -829,8 +999,10 @@ func (s *genstate) emitAssignFuncs(b *bytes.Buffer, emit bool) {
 }
 
 func (s *genstate) emitNewFuncs(b *bytes.Buffer, emit bool) {
+	b.WriteString("// 'new' funcs\n")
 	for _, fd := range s.newnfuncs {
 		if !emit {
+			b.WriteString(fmt.Sprintf("\n// skip newfunc %s\n", fd.name))
 			delete(s.nfuncs, fd.tag)
 			continue
 		}
@@ -850,9 +1022,14 @@ func (s *genstate) emitNewFuncs(b *bytes.Buffer, emit bool) {
 	s.newnfuncs = nil
 }
 
-func (s *genstate) emitGlobalVars(b *bytes.Buffer) {
+func (s *genstate) emitGlobalVars(b *bytes.Buffer, emit bool) {
+	b.WriteString("// global vars\n")
 	for _, fd := range s.newgvars {
-		b.WriteString("\n")
+		if !emit {
+			b.WriteString(fmt.Sprintf("\n// skip gvar %s\n", fd.name))
+			delete(s.gvars, fd.tag)
+			continue
+		}
 		b.WriteString("var ")
 		fd.pp.Declare(b, fd.name, "", false)
 		b.WriteString("\n")
@@ -862,10 +1039,12 @@ func (s *genstate) emitGlobalVars(b *bytes.Buffer) {
 }
 
 func (s *genstate) emitAddrTakenHelpers(b *bytes.Buffer, emit bool) {
+	b.WriteString("// begin addr taken helpers\n")
 	s.emitDerefFuncs(b, emit)
 	s.emitAssignFuncs(b, emit)
 	s.emitNewFuncs(b, emit)
-	s.emitGlobalVars(b)
+	s.emitGlobalVars(b, emit)
+	b.WriteString("// end addr taken helpers\n")
 }
 
 func (s *genstate) genGvar(p parm) string {
@@ -971,7 +1150,7 @@ func (s *genstate) emitParamElemCheck(f *funcdef, b *bytes.Buffer, p parm, pvar 
 		return
 	}
 	if basep.HasPointer() {
-		efn := "Equal" + basep.TypeName()
+		efn := s.eqFuncRef(f, basep, false)
 		b.WriteString(fmt.Sprintf("  if !%s(%s%s, %s%s) {\n", efn, star, pvar, star, cvar))
 	} else {
 		b.WriteString(fmt.Sprintf("  if %s%s != %s%s {\n", star, pvar, star, cvar))
@@ -983,19 +1162,22 @@ func (s *genstate) emitParamElemCheck(f *funcdef, b *bytes.Buffer, p parm, pvar 
 }
 
 func (s *genstate) emitParamChecks(f *funcdef, b *bytes.Buffer, pidx int, value int) (int, bool) {
+	var valstr string
 	haveControl := false
 	dangling := []int{}
 	for pi, p := range f.params {
 		verb(4, "emitting parmcheck p%d numel=%d pt=%s value=%d",
 			pi, p.NumElements(), p.TypeName(), value)
+		// To balance code in caller
+		_ = uint8(s.wr.Intn(100)) < 50
 		if p.IsControl() {
 			b.WriteString(fmt.Sprintf("  if %s == 0 {\n",
 				s.genParamRef(p, pi)))
 			s.emitReturn(f, b, false)
 			b.WriteString("  }\n")
 			haveControl = true
+
 		} else if p.IsBlank() {
-			var valstr string
 			valstr, value = p.GenValue(s, value, false)
 			if f.recur {
 				b.WriteString(fmt.Sprintf("  brc%d := %s\n", pi, valstr))
@@ -1006,12 +1188,11 @@ func (s *genstate) emitParamChecks(f *funcdef, b *bytes.Buffer, pidx int, value 
 			numel := p.NumElements()
 			cel := checkableElements(p)
 			for i := 0; i < numel; i++ {
-				var valstr string
 				verb(4, "emitting check-code for p%d el %d value=%d", pi, i, value)
 				elref, elparm := p.GenElemRef(i, s.genParamRef(p, pi))
 				valstr, value = elparm.GenValue(s, value, false)
 				if elref == "" || elref == "_" || cel == 0 {
-					verb(4, "empty skip p%d el %d", pi, i)
+					b.WriteString(fmt.Sprintf("  // skip: %s\n", valstr))
 					continue
 				} else {
 					basep, _ := genDeref(elparm)
@@ -1041,7 +1222,6 @@ func (s *genstate) emitParamChecks(f *funcdef, b *bytes.Buffer, pidx int, value 
 	if f.method {
 		numel := f.receiver.NumElements()
 		for i := 0; i < numel; i++ {
-			var valstr string
 			verb(4, "emitting check-code for rcvr el %d value=%d", i, value)
 			elref, elparm := f.receiver.GenElemRef(i, "rcvr")
 			valstr, value = elparm.GenValue(s, value, false)
@@ -1147,9 +1327,26 @@ func (s *genstate) emitDeferChecks(f *funcdef, b *bytes.Buffer, pidx int, value 
 	return value
 }
 
+func (s *genstate) emitVarAssign(f *funcdef, b *bytes.Buffer, r parm, rname string, value int, caller bool) int {
+	var valstr string
+	isassign := uint8(s.wr.Intn(100)) < 50
+	if rmp, ismap := r.(*mapparm); ismap && isassign {
+		// emit: var m ... ; m[k] = v
+		r.Declare(b, "  "+rname+" := make(", ")\n", caller)
+		valstr, value = rmp.valtype.GenValue(s, value, caller)
+		b.WriteString(fmt.Sprintf("  %s[mkt.%s] = %s\n",
+			rname, rmp.keytmp, valstr))
+	} else {
+		// emit r = c
+		valstr, value = r.GenValue(s, value, caller)
+		b.WriteString(fmt.Sprintf("  %s := %s\n", rname, valstr))
+	}
+	return value
+}
+
 func (s *genstate) emitChecker(f *funcdef, b *bytes.Buffer, pidx int, emit bool) {
 	verb(4, "emitting struct and array defs")
-	emitStructAndArrayDefs(f, b)
+	s.emitStructAndArrayDefs(f, b)
 	b.WriteString(fmt.Sprintf("// %d returns %d params\n", len(f.returns), len(f.params)))
 	if s.pragma != "" {
 		b.WriteString("//go:" + s.pragma + "\n")
@@ -1201,12 +1398,17 @@ func (s *genstate) emitChecker(f *funcdef, b *bytes.Buffer, pidx int, emit bool)
 	b.WriteString(fmt.Sprintf("  var pad [%d]uint64\n", f.rstack))
 	b.WriteString(fmt.Sprintf("  pad[%s.FailCount&0x1]++\n", s.utilsPkg()))
 
-	// generate return constants
 	value := 1
+
+	// generate map key tmps
+	s.wr.Checkpoint("before map key temps")
+	value = s.emitMapKeyTmps(f, b, pidx, value, false)
+
+	// generate return constants
+	s.wr.Checkpoint("before return constants")
 	for ri, r := range f.returns {
-		var valstr string
-		valstr, value = r.GenValue(s, value, false)
-		b.WriteString(fmt.Sprintf("  rc%d := %s\n", ri, valstr))
+		rc := fmt.Sprintf("rc%d", ri)
+		value = s.emitVarAssign(f, b, r, rc, value, false)
 	}
 
 	// Prepare to reference params/returns by address.
@@ -1230,10 +1432,12 @@ func (s *genstate) emitChecker(f *funcdef, b *bytes.Buffer, pidx int, emit bool)
 
 	// parameter checking code
 	var haveControl bool
+	s.wr.Checkpoint("before param checks")
 	value, haveControl = s.emitParamChecks(f, b, pidx, value)
 
 	// defer testing
 	if s.tunables.doDefer && f.dodefc < s.tunables.deferFraction {
+		s.wr.Checkpoint("before defer checks")
 		_ = s.emitDeferChecks(f, b, pidx, value)
 	}
 
@@ -1367,12 +1571,12 @@ func (s *genstate) GenPair(calloutfile *os.File, checkoutfile *os.File, fidx int
 	s.tunables = tunables
 
 	// Generate a function with a random number of params and returns
-	s.wr = NewWrapRand(seed)
+	s.wr = NewWrapRand(seed, s.tracerand)
 	s.wr.tag = "genfunc"
 	fp := s.GenFunc(fidx, pidx)
 
 	// Emit caller side
-	wrcaller := NewWrapRand(seed)
+	wrcaller := NewWrapRand(seed, s.tracerand)
 	s.wr = wrcaller
 	s.wr.tag = "caller"
 	s.emitCaller(fp, b, pidx)
@@ -1382,7 +1586,7 @@ func (s *genstate) GenPair(calloutfile *os.File, checkoutfile *os.File, fidx int
 	b.Reset()
 
 	// Emit checker side
-	wrchecker := NewWrapRand(seed)
+	wrchecker := NewWrapRand(seed, s.tracerand)
 	s.wr = wrchecker
 	s.wr.tag = "checker"
 	s.emitChecker(fp, b, pidx, emit)
@@ -1543,7 +1747,7 @@ func emitFP(fn int, pk int, fcnmask map[int]int, pkmask map[int]int) bool {
 	return doemit
 }
 
-func Generate(tag string, outdir string, pkgpath string, numit int, numtpkgs int, seed int64, pragma string, fcnmask map[int]int, pkmask map[int]int, utilsinl bool, maxfail int, forcestackgrowth bool) int {
+func Generate(tag string, outdir string, pkgpath string, numit int, numtpkgs int, seed int64, pragma string, fcnmask map[int]int, pkmask map[int]int, utilsinl bool, maxfail int, forcestackgrowth bool, tracerand bool) int {
 	mainpkg := tag + "Main"
 
 	var ipref string
@@ -1552,12 +1756,13 @@ func Generate(tag string, outdir string, pkgpath string, numit int, numtpkgs int
 	}
 
 	s := genstate{
-		outdir: outdir,
-		ipref:  ipref,
-		tag:    tag,
-		numtpk: numtpkgs,
-		pragma: pragma,
-		sforce: forcestackgrowth,
+		outdir:    outdir,
+		ipref:     ipref,
+		tag:       tag,
+		numtpk:    numtpkgs,
+		pragma:    pragma,
+		sforce:    forcestackgrowth,
+		tracerand: tracerand,
 	}
 
 	if outdir != "." {
@@ -1567,10 +1772,10 @@ func Generate(tag string, outdir string, pkgpath string, numit int, numtpkgs int
 
 	mainimports := []string{}
 	for i := 0; i < numtpkgs; i++ {
-		makeDir(outdir + "/" + s.callerPkg(i))
-		makeDir(outdir + "/" + s.checkerPkg(i))
-		makeDir(outdir + "/" + s.utilsPkg())
 		if emitFP(-1, i, nil, pkmask) {
+			makeDir(outdir + "/" + s.callerPkg(i))
+			makeDir(outdir + "/" + s.checkerPkg(i))
+			makeDir(outdir + "/" + s.utilsPkg())
 			mainimports = append(mainimports, s.callerPkg(i))
 		}
 	}
@@ -1595,10 +1800,13 @@ func Generate(tag string, outdir string, pkgpath string, numit int, numtpkgs int
 			callerImports = append(callerImports, "unsafe")
 			checkerImports = append(checkerImports, "unsafe")
 		}
-		calleroutfile := s.openOutputFile(s.callerFile(k), s.callerPkg(k),
-			callerImports, ipref)
-		checkeroutfile := s.openOutputFile(s.checkerFile(k), s.checkerPkg(k),
-			checkerImports, ipref)
+		var calleroutfile, checkeroutfile *os.File
+		if emitFP(-1, k, nil, pkmask) {
+			calleroutfile = s.openOutputFile(s.callerFile(k), s.callerPkg(k),
+				callerImports, ipref)
+			checkeroutfile = s.openOutputFile(s.checkerFile(k), s.checkerPkg(k),
+				checkerImports, ipref)
+		}
 
 		s.pkidx = k
 		s.newpfuncs = nil

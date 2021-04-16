@@ -38,6 +38,8 @@ SEED=`seconds.py`
 HERE=`pwd`
 PRAG=""
 PRAG="-pragma registerparams -method=1 -reflect=1 -maxfail=9999"
+#NP=10
+#NF=10
 NP=100
 NF=20
 while [ $ITER !=  0 ]; do

@@ -26,9 +26,10 @@ func (p typedefparm) Declare(b *bytes.Buffer, prefix string, suffix string, call
 func (p typedefparm) GenElemRef(elidx int, path string) (string, parm) {
 	_, isarr := p.target.(*arrayparm)
 	_, isstruct := p.target.(*structparm)
+	_, ismap := p.target.(*mapparm)
 	rv, rp := p.target.GenElemRef(elidx, path)
 	// this is hacky, but I don't see a nicer way to do this
-	if isarr || isstruct {
+	if isarr || isstruct || ismap {
 		return rv, rp
 	}
 	rp = &p

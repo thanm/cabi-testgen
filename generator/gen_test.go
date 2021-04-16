@@ -25,14 +25,14 @@ func TestBasic(t *testing.T) {
 	checkTunables(tunables)
 	s := mkGenState()
 	for i := 0; i < 1000; i++ {
-		s.wr = NewWrapRand(int64(i))
+		s.wr = NewWrapRand(int64(i), false)
 		fp := s.GenFunc(i, i)
 		var buf bytes.Buffer
 		var b *bytes.Buffer = &buf
-		wr := NewWrapRand(int64(i))
+		wr := NewWrapRand(int64(i), false)
 		s.wr = wr
 		s.emitCaller(fp, b, i)
-		s.wr = NewWrapRand(int64(i))
+		s.wr = NewWrapRand(int64(i), false)
 		s.emitChecker(fp, b, i, true)
 		wr.Check(s.wr)
 	}
@@ -48,15 +48,15 @@ func TestMoreComplicated(t *testing.T) {
 	checkTunables(tunables)
 	s := mkGenState()
 	for i := 0; i < 10000; i++ {
-		s.wr = NewWrapRand(int64(i))
+		s.wr = NewWrapRand(int64(i), false)
 		fp := s.GenFunc(i, i)
 		var buf bytes.Buffer
 		var b *bytes.Buffer = &buf
-		wr := NewWrapRand(int64(i))
+		wr := NewWrapRand(int64(i), false)
 		s.wr = wr
 		s.emitCaller(fp, b, i)
 		verb(1, "finished iter %d caller", i)
-		s.wr = NewWrapRand(int64(i))
+		s.wr = NewWrapRand(int64(i), false)
 		s.emitChecker(fp, b, i, true)
 		verb(1, "finished iter %d checker", i)
 		wr.Check(s.wr)
@@ -81,7 +81,7 @@ func TestIsBuildable(t *testing.T) {
 
 	checkTunables(tunables)
 	pack := filepath.Base(td)
-	errs := Generate("x", td, pack, 10, 10, int64(0), "", nil, nil, false, 10, false)
+	errs := Generate("x", td, pack, 10, 10, int64(0), "", nil, nil, false, 10, false, false)
 	if errs != 0 {
 		t.Errorf("%d errors during Generate", errs)
 	}
@@ -181,7 +181,7 @@ func TestExhaustive(t *testing.T) {
 		s.adjuster()
 		os.RemoveAll(td)
 		pack := filepath.Base(td)
-		errs := Generate("x", td, pack, 10, 10, int64(i+9), "", nil, nil, false, 10, false)
+		errs := Generate("x", td, pack, 10, 10, int64(i+9), "", nil, nil, false, 10, false, false)
 		if errs != 0 {
 			t.Errorf("%d errors during scenarios %q Generate", errs, s.name)
 		}
@@ -194,3 +194,5 @@ func TestExhaustive(t *testing.T) {
 		verb(1, "output is: %s\n", string(coutput))
 	}
 }
+
+// To add: random type fractions
