@@ -2,6 +2,8 @@
 #
 # Simple test script for performing a series of test runs.
 #
+DOCLOBBER=yes
+DOSETGOGC=yes
 DOMINIMIZE=no
 DOMINIMIZE=yes
 GEX=
@@ -17,7 +19,17 @@ DOCLEANCACHE=no
 if [ $HOWMANY > 50 ]; then
   DOCLEANCACHE=yes
 fi
-ITER=${HOWMANY}
+GCFLAGS="-c=56"
+GCFLAGS2="-c=1"
+if [ $DOCLOBBER = "yes" ]; then
+  GCFLAGS="-c=56 -clobberdead"
+  GCFLAGS="-c=1 -clobberdead"
+fi
+if [ $DOSETGOGC = "yes" ]; then
+  echo export GOGC=10
+  export GOGC=10
+fi
+ITER=0
 go build .
 function cleanUnused() {
   local SAVE=$1
@@ -42,9 +54,9 @@ PRAG="-pragma registerparams -method=1 -reflect=1 -maxfail=9999"
 #NF=10
 NP=100
 NF=20
-while [ $ITER !=  0 ]; do
+while [ $ITER -lt ${HOWMANY} ]; do
   echo iter $ITER
-  ITER=`expr $ITER - 1`
+  ITER=`expr $ITER + 1`
   echo "Iter $ITER"
   if [ "$DOCLEANCACHE" = "yes" ]; then
     MOD0=`expr $ITER % 100`
@@ -67,14 +79,18 @@ while [ $ITER !=  0 ]; do
   cd $D
   rm -f cabiTest
   echo "... building"
-  go build . 1> ${HERE}/build.err.txt 2>&1
-  if [ $? != 0 ]; then
+  set -x
+  go build -gcflags=all="$GCFLAGS" . 1> ${HERE}/build.err.txt 2>&1
+  RC=$?
+  set +x
+  if [ $RC != 0 ]; then
     echo "*** building generated code failed, SEED=$SEED see build.err.txt"
     if [ $DOMINIMIZE != "yes" ]; then
       exit 1
     fi
     echo "... serial build"
-    go build -gcflags="-c=1" -p 1 . 1> ${HERE}/build.err.txt 2>&1
+    
+    go build -p=1 -gcflags=all="$GCFLAGS2" -p 1 . 1> ${HERE}/build.err.txt 2>&1
     echo "*** now trying to minimize by package"
     mv /tmp/cabiTest /tmp/cabiTest.orig
     # Minimize by package
@@ -92,7 +108,8 @@ while [ $ITER !=  0 ]; do
       fi
       cd $D
       rm -f cabiTest
-      go build -gcflags="-c=1" -p 1 . 1> build.err.${P}.txt 2>&1
+      
+      go build -p=1 -gcflags=all="$GCFLAGS2" . 1> build.err.${P}.txt 2>&1
       if [ $? != 0 ]; then
         echo "found offending package $P"
         BADP=$P
@@ -121,7 +138,7 @@ while [ $ITER !=  0 ]; do
         fi
         cd $D
         rm -f cabiTest
-        go build -gcflags="-c=1" -p 1 . 1> build.err.${P}.${F}.txt 2>&1
+        go build -gcflags=all="$GCFLAGS2" . 1> build.err.${P}.${F}.txt 2>&1
         if [ $? != 0 ]; then
           echo "found offending function $F"
           BADF=$F
