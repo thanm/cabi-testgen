@@ -167,13 +167,18 @@ Todos:
 
 - add interface values
 
-- experiment with -clobberdead compiler option, also with GODEBUG=clobberfree
-  and explicit calls to runtime.GC()
-  
 - implement testing of reflect.MakeFunc
 
 - rework things so that instead of always checking all of a given parameter
   value, we sometimes skip over elements (or just check the length of a slice
   or string as opposed to looking at its value)
   
+- kick off each test or each package in a separate goroutine
+  + will require getting rid of globals use in genUtils
+
+- add a top level loop
+
+- add runtime.GC() calls
+
+- run goimports on each generated file
   
