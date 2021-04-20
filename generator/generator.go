@@ -287,26 +287,28 @@ type funcdef struct {
 }
 
 type genstate struct {
-	outdir    string
-	ipref     string
-	tag       string
-	numtpk    int
-	pkidx     int
-	errs      int
-	pragma    string
-	sforce    bool
-	tracerand bool
-	tunables  TunableParams
-	tstack    []TunableParams
-	pfuncs    map[string]string
-	newpfuncs []funcdesc
-	rfuncs    map[string]string
-	newrfuncs []funcdesc
-	gvars     map[string]string
-	newgvars  []funcdesc
-	nfuncs    map[string]string
-	newnfuncs []funcdesc
-	wr        *wraprand
+	outdir         string
+	ipref          string
+	tag            string
+	numtpk         int
+	pkidx          int
+	errs           int
+	pragma         string
+	sforce         bool
+	tracerand      bool
+	tunables       TunableParams
+	tstack         []TunableParams
+	derefFuncs     map[string]string
+	newDerefFuncs  []funcdesc
+	assignFuncs    map[string]string
+	newAssignFuncs []funcdesc
+	allocFuncs     map[string]string
+	newAllocFuncs  []funcdesc
+	genvalFuncs    map[string]string
+	newGenvalFuncs []funcdesc
+	globVars       map[string]string
+	newGlobVars    []funcdesc
+	wr             *wraprand
 }
 
 func (s *genstate) intFlavor() string {
@@ -951,6 +953,14 @@ func checkableElements(p parm) int {
 	return 1
 }
 
+// funcdesc describes an auto-generated helper function or global
+// variable, such as an allocation function (returns new(T)) or a
+// pointer assignment function (assigns value of T to type *T). Here
+// 'p' is a param type T, 'pp' is a pointer type *T, 'name' is the
+// name within the generated code of the function or variable and
+// 'tag' is a descriptive tag used to look up the entity in a map (so
+// that we don't have to emit multiple copies of a function that
+// assigns int to *int, for exampkle).
 type funcdesc struct {
 	p    parm
 	pp   parm
@@ -960,10 +970,10 @@ type funcdesc struct {
 
 func (s *genstate) emitDerefFuncs(b *bytes.Buffer, emit bool) {
 	b.WriteString("// dereference helpers\n")
-	for _, fd := range s.newpfuncs {
+	for _, fd := range s.newDerefFuncs {
 		if !emit {
 			b.WriteString(fmt.Sprintf("\n// skip derefunc %s\n", fd.name))
-			delete(s.pfuncs, fd.tag)
+			delete(s.derefFuncs, fd.tag)
 			continue
 		}
 		b.WriteString("\n//go:noinline\n")
@@ -975,15 +985,15 @@ func (s *genstate) emitDerefFuncs(b *bytes.Buffer, emit bool) {
 		b.WriteString("  return *x\n")
 		b.WriteString("}\n")
 	}
-	s.newpfuncs = nil
+	s.newDerefFuncs = nil
 }
 
 func (s *genstate) emitAssignFuncs(b *bytes.Buffer, emit bool) {
 	b.WriteString("// assign helpers\n")
-	for _, fd := range s.newrfuncs {
+	for _, fd := range s.newAssignFuncs {
 		if !emit {
 			b.WriteString(fmt.Sprintf("\n// skip assignfunc %s\n", fd.name))
-			delete(s.rfuncs, fd.tag)
+			delete(s.assignFuncs, fd.tag)
 			continue
 		}
 		b.WriteString("\n//go:noinline\n")
@@ -995,15 +1005,15 @@ func (s *genstate) emitAssignFuncs(b *bytes.Buffer, emit bool) {
 		b.WriteString("  *x = v\n")
 		b.WriteString("}\n")
 	}
-	s.newrfuncs = nil
+	s.newAssignFuncs = nil
 }
 
 func (s *genstate) emitNewFuncs(b *bytes.Buffer, emit bool) {
 	b.WriteString("// 'new' funcs\n")
-	for _, fd := range s.newnfuncs {
+	for _, fd := range s.newAllocFuncs {
 		if !emit {
 			b.WriteString(fmt.Sprintf("\n// skip newfunc %s\n", fd.name))
-			delete(s.nfuncs, fd.tag)
+			delete(s.allocFuncs, fd.tag)
 			continue
 		}
 		b.WriteString("\n//go:noinline\n")
@@ -1019,22 +1029,22 @@ func (s *genstate) emitNewFuncs(b *bytes.Buffer, emit bool) {
 		b.WriteString("  return x\n")
 		b.WriteString("}\n\n")
 	}
-	s.newnfuncs = nil
+	s.newAllocFuncs = nil
 }
 
 func (s *genstate) emitGlobalVars(b *bytes.Buffer, emit bool) {
 	b.WriteString("// global vars\n")
-	for _, fd := range s.newgvars {
+	for _, fd := range s.newGlobVars {
 		if !emit {
 			b.WriteString(fmt.Sprintf("\n// skip gvar %s\n", fd.name))
-			delete(s.gvars, fd.tag)
+			delete(s.globVars, fd.tag)
 			continue
 		}
 		b.WriteString("var ")
 		fd.pp.Declare(b, fd.name, "", false)
 		b.WriteString("\n")
 	}
-	s.newgvars = nil
+	s.newGlobVars = nil
 	b.WriteString("\n")
 }
 
@@ -1047,20 +1057,20 @@ func (s *genstate) emitAddrTakenHelpers(b *bytes.Buffer, emit bool) {
 	b.WriteString("// end addr taken helpers\n")
 }
 
-func (s *genstate) genGvar(p parm) string {
+func (s *genstate) genGlobVar(p parm) string {
 	var pp parm
 	ppp := mkPointerParm(p)
 	pp = &ppp
 	b := bytes.NewBuffer(nil)
 	pp.Declare(b, "gv", "", false)
 	tag := b.String()
-	gv, ok := s.gvars[tag]
+	gv, ok := s.globVars[tag]
 	if ok {
 		return gv
 	}
-	gv = fmt.Sprintf("gvar_%d", len(s.gvars))
-	s.newgvars = append(s.newgvars, funcdesc{pp: pp, p: p, name: gv, tag: tag})
-	s.gvars[tag] = gv
+	gv = fmt.Sprintf("gvar_%d", len(s.globVars))
+	s.newGlobVars = append(s.newGlobVars, funcdesc{pp: pp, p: p, name: gv, tag: tag})
+	s.globVars[tag] = gv
 	return gv
 }
 
@@ -1071,13 +1081,13 @@ func (s *genstate) genParamDerefFunc(p parm) string {
 	b := bytes.NewBuffer(nil)
 	pp.Declare(b, "x", "", false)
 	tag := b.String()
-	f, ok := s.pfuncs[tag]
+	f, ok := s.derefFuncs[tag]
 	if ok {
 		return f
 	}
-	f = fmt.Sprintf("deref_%d", len(s.pfuncs))
-	s.newpfuncs = append(s.newpfuncs, funcdesc{pp: pp, p: p, name: f, tag: tag})
-	s.pfuncs[tag] = f
+	f = fmt.Sprintf("deref_%d", len(s.derefFuncs))
+	s.newDerefFuncs = append(s.newDerefFuncs, funcdesc{pp: pp, p: p, name: f, tag: tag})
+	s.derefFuncs[tag] = f
 	return f
 }
 
@@ -1088,30 +1098,30 @@ func (s *genstate) genAssignFunc(p parm) string {
 	b := bytes.NewBuffer(nil)
 	pp.Declare(b, "x", "", false)
 	tag := b.String()
-	f, ok := s.rfuncs[tag]
+	f, ok := s.assignFuncs[tag]
 	if ok {
 		return f
 	}
-	f = fmt.Sprintf("retassign_%d", len(s.rfuncs))
-	s.newrfuncs = append(s.newrfuncs, funcdesc{pp: pp, p: p, name: f, tag: tag})
-	s.rfuncs[tag] = f
+	f = fmt.Sprintf("retassign_%d", len(s.assignFuncs))
+	s.newAssignFuncs = append(s.newAssignFuncs, funcdesc{pp: pp, p: p, name: f, tag: tag})
+	s.assignFuncs[tag] = f
 	return f
 }
 
-func (s *genstate) genNewFunc(p parm) string {
+func (s *genstate) genAllocFunc(p parm) string {
 	var pp parm
 	ppp := mkPointerParm(p)
 	pp = &ppp
 	b := bytes.NewBuffer(nil)
 	pp.Declare(b, "x", "", false)
 	tag := b.String()
-	f, ok := s.nfuncs[tag]
+	f, ok := s.allocFuncs[tag]
 	if ok {
 		return f
 	}
-	f = fmt.Sprintf("New_%d", len(s.nfuncs))
-	s.newnfuncs = append(s.newnfuncs, funcdesc{pp: pp, p: p, name: f, tag: tag})
-	s.nfuncs[tag] = f
+	f = fmt.Sprintf("New_%d", len(s.allocFuncs))
+	s.newAllocFuncs = append(s.newAllocFuncs, funcdesc{pp: pp, p: p, name: f, tag: tag})
+	s.allocFuncs[tag] = f
 	return f
 }
 
@@ -1424,7 +1434,7 @@ func (s *genstate) emitChecker(f *funcdef, b *bytes.Buffer, pidx int, emit bool)
 			n := names[i]
 			b.WriteString(fmt.Sprintf("  a%s%d := &%s%d\n", n, pi, n, pi))
 			if p.AddrTaken() == addrTakenHeap {
-				gv := s.genGvar(p)
+				gv := s.genGlobVar(p)
 				b.WriteString(fmt.Sprintf("  %s = a%s%d\n", gv, n, pi))
 			}
 		}
@@ -1809,13 +1819,13 @@ func Generate(tag string, outdir string, pkgpath string, numit int, numtpkgs int
 		}
 
 		s.pkidx = k
-		s.newpfuncs = nil
-		s.newrfuncs = nil
-		s.newgvars = nil
-		s.pfuncs = make(map[string]string)
-		s.rfuncs = make(map[string]string)
-		s.nfuncs = make(map[string]string)
-		s.gvars = make(map[string]string)
+		s.newDerefFuncs = nil
+		s.newAssignFuncs = nil
+		s.newGlobVars = nil
+		s.derefFuncs = make(map[string]string)
+		s.assignFuncs = make(map[string]string)
+		s.allocFuncs = make(map[string]string)
+		s.globVars = make(map[string]string)
 
 		var b bytes.Buffer
 		for i := 0; i < numit; i++ {

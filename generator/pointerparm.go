@@ -33,7 +33,7 @@ func (p pointerparm) GenValue(s *genstate, value int, caller bool) (string, int)
 	}
 	var valstr string
 	valstr, value = p.totype.GenValue(s, value, caller)
-	fname := s.genNewFunc(p.totype)
+	fname := s.genAllocFunc(p.totype)
 	return fmt.Sprintf("%s%s(%s)", pref, fname, valstr), value
 }
 

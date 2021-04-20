@@ -11,13 +11,14 @@ import (
 
 func mkGenState() *genstate {
 	return &genstate{
-		outdir: "/tmp",
-		ipref:  "foo/",
-		tag:    "gen",
-		numtpk: 1,
-		pfuncs: make(map[string]string),
-		rfuncs: make(map[string]string),
-		gvars:  make(map[string]string),
+		outdir:      "/tmp",
+		ipref:       "foo/",
+		tag:         "gen",
+		numtpk:      1,
+		derefFuncs:  make(map[string]string),
+		assignFuncs: make(map[string]string),
+		allocFuncs:  make(map[string]string),
+		globVars:    make(map[string]string),
 	}
 }
 
