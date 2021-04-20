@@ -8,9 +8,16 @@ import (
 	"strings"
 )
 
-func NewWrapRand(seed int64, debug bool) *wraprand {
+const (
+	RandCtlNochecks = 0
+	RandCtlChecks   = 1 << iota
+	RandCtlCapture
+	RandCtlPanic
+)
+
+func NewWrapRand(seed int64, ctl int) *wraprand {
 	rand.Seed(seed)
-	return &wraprand{seed: seed, debug: debug}
+	return &wraprand{seed: seed, ctl: ctl}
 }
 
 type wraprand struct {
@@ -20,11 +27,11 @@ type wraprand struct {
 	seed      int64
 	tag       string
 	calls     []string
-	debug     bool
+	ctl       int
 }
 
-func (w *wraprand) captureCall(tag string) {
-	call := tag + ":\n"
+func (w *wraprand) captureCall(tag string, val string) {
+	call := tag + ": " + val + "\n"
 	pc := make([]uintptr, 10)
 	n := runtime.Callers(1, pc)
 	if n == 0 {
@@ -47,27 +54,30 @@ func (w *wraprand) captureCall(tag string) {
 }
 
 func (w *wraprand) Intn(n int) int {
-	if w.debug {
-		w.captureCall("Intn")
-	}
 	w.intncalls++
-	return rand.Intn(n)
+	rv := rand.Intn(n)
+	if w.ctl&RandCtlCapture != 0 {
+		w.captureCall("Intn", fmt.Sprintf("%d", rv))
+	}
+	return rv
 }
 
 func (w *wraprand) Float32() float32 {
-	if w.debug {
-		w.captureCall("Float32")
-	}
 	w.f32calls++
-	return rand.Float32()
+	rv := rand.Float32()
+	if w.ctl&RandCtlCapture != 0 {
+		w.captureCall("Float32", fmt.Sprintf("%f", rv))
+	}
+	return rv
 }
 
 func (w *wraprand) NormFloat64() float64 {
-	if w.debug {
-		w.captureCall("NormFloat64")
-	}
 	w.f64calls++
-	return rand.NormFloat64()
+	rv := rand.NormFloat64()
+	if w.ctl&RandCtlCapture != 0 {
+		w.captureCall("NormFloat64", fmt.Sprintf("%f", rv))
+	}
+	return rv
 }
 
 func (w *wraprand) emitCalls(fn string) {
@@ -88,7 +98,7 @@ func (w *wraprand) Equal(w2 *wraprand) bool {
 }
 
 func (w *wraprand) Check(w2 *wraprand) {
-	if !w.Equal(w2) {
+	if w.ctl != 0 && !w.Equal(w2) {
 		fmt.Fprintf(os.Stderr, "wraprand consistency check failed:\n")
 		t := "w"
 		if w.tag != "" {
@@ -102,17 +112,21 @@ func (w *wraprand) Check(w2 *wraprand) {
 			w.f32calls, w.f64calls, w.intncalls)
 		fmt.Fprintf(os.Stderr, " %s: {f32:%d f64:%d i:%d}\n", t2,
 			w2.f32calls, w2.f64calls, w2.intncalls)
-		if w.debug {
+		if w.ctl&RandCtlCapture != 0 {
 			f := fmt.Sprintf("/tmp/%s.txt", t)
 			f2 := fmt.Sprintf("/tmp/%s.txt", t2)
 			w.emitCalls(f)
 			w2.emitCalls(f2)
 			fmt.Fprintf(os.Stderr, "=-= emitted calls to %s, %s\n", f, f2)
 		}
-		panic("bad")
+		if w.ctl&RandCtlPanic != 0 {
+			panic("bad")
+		}
 	}
 }
 
 func (w *wraprand) Checkpoint(tag string) {
-	w.calls = append(w.calls, "=-=\n"+tag+"\n=-=\n")
+	if w.ctl&RandCtlCapture != 0 {
+		w.calls = append(w.calls, "=-=\n"+tag+"\n=-=\n")
+	}
 }

@@ -14,6 +14,7 @@ type structparm struct {
 	fields []parm
 	isBlank
 	addrTakenHow
+	isGenValFunc
 }
 
 func (p structparm) TypeName() string {
@@ -50,7 +51,7 @@ func (p structparm) String() string {
 	return buf.String()
 }
 
-func (p structparm) GenValue(s *genstate, value int, caller bool) (string, int) {
+func (p structparm) GenValue(s *genstate, f *funcdef, value int, caller bool) (string, int) {
 	var buf bytes.Buffer
 
 	verb(5, "structparm.GenValue(%d)", value)
@@ -61,9 +62,9 @@ func (p structparm) GenValue(s *genstate, value int, caller bool) (string, int) 
 	}
 	buf.WriteString(fmt.Sprintf("%s{", n))
 	nbfi := 0
-	for fi, f := range p.fields {
+	for fi, fld := range p.fields {
 		var valstr string
-		valstr, value = f.GenValue(s, value, caller)
+		valstr, value = s.GenValue(f, fld, value, caller)
 		if p.fields[fi].IsBlank() {
 			buf.WriteString("/* ")
 			valstr = strings.ReplaceAll(valstr, "/*", "[[")

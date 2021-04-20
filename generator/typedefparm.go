@@ -13,6 +13,7 @@ type typedefparm struct {
 	target parm
 	isBlank
 	addrTakenHow
+	isGenValFunc
 }
 
 func (p typedefparm) Declare(b *bytes.Buffer, prefix string, suffix string, caller bool) {
@@ -36,12 +37,12 @@ func (p typedefparm) GenElemRef(elidx int, path string) (string, parm) {
 	return rv, rp
 }
 
-func (p typedefparm) GenValue(s *genstate, value int, caller bool) (string, int) {
+func (p typedefparm) GenValue(s *genstate, f *funcdef, value int, caller bool) (string, int) {
 	n := p.aname
 	if caller {
 		n = p.qname
 	}
-	rv, v := p.target.GenValue(s, value, caller)
+	rv, v := s.GenValue(f, p.target, value, caller)
 	rv = n + "(" + rv + ")"
 	return rv, v
 }

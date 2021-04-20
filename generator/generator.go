@@ -2,6 +2,7 @@ package generator
 
 import (
 	"bytes"
+	"crypto/sha1"
 	"errors"
 	"fmt"
 	"log"
@@ -83,6 +84,15 @@ type TunableParams struct {
 
 	// fraction of test functions for which we emit a defer
 	deferFraction uint8
+
+	// If true, randomly pick between emitting a value by literal
+	// (e.g. "int(1)" vs emitting a call to a function that
+	// will produce the same value (e.g. "myHelperEmitsInt1()").
+	doFuncCallValues bool
+
+	// Fraction of the time that we emit a function call to create
+	// a param value vs emitting a literal.
+	funcCallValFraction uint8
 }
 
 var defaultTypeFractions = [9]uint8{
@@ -130,8 +140,10 @@ var tunables = TunableParams{
 	doReflectCall:         true,
 	doDefer:               true,
 	takeAddress:           true,
+	doFuncCallValues:      true,
 	takenFraction:         20,
 	deferFraction:         30,
+	funcCallValFraction:   5,
 	addrFractions:         [4]uint8{50, 25, 15, 10},
 }
 
@@ -295,7 +307,7 @@ type genstate struct {
 	errs           int
 	pragma         string
 	sforce         bool
-	tracerand      bool
+	randctl        int
 	tunables       TunableParams
 	tstack         []TunableParams
 	derefFuncs     map[string]string
@@ -459,6 +471,8 @@ func (s *genstate) GenParm(f *funcdef, depth int, mkctl bool, pidx int) parm {
 	if depth == 0 && tunables.takeAddress && !isblank {
 		addrTaken = s.genAddrTaken()
 	}
+	isGenValFunc := tunables.doFuncCallValues &&
+		uint8(s.wr.Intn(100)) < s.tunables.funcCallValFraction
 
 	// Make adjusted selection (pick a bucket within tf)
 	which := uint8(s.wr.Intn(100))
@@ -594,6 +608,7 @@ func (s *genstate) GenParm(f *funcdef, depth int, mkctl bool, pidx int) parm {
 		retval.SetBlank(isblank)
 	}
 	retval.SetAddrTaken(addrTaken)
+	retval.SetIsGenVal(isGenValFunc)
 	return retval
 }
 
@@ -760,6 +775,48 @@ func (s *genstate) emitStructAndArrayDefs(f *funcdef, b *bytes.Buffer) {
 	}
 }
 
+// GenValue method of genstate wraps the parm method of the same
+// name, but optionally returns a call to a function to produce
+// the value as opposed to a literal value.
+func (s *genstate) GenValue(f *funcdef, p parm, value int, caller bool) (string, int) {
+	var valstr string
+	valstr, value = p.GenValue(s, f, value, caller)
+	if !s.tunables.doFuncCallValues || !p.IsGenVal() || caller {
+		return valstr, value
+	}
+
+	mkInvoc := func(fname string) string {
+		meth := ""
+		if f.mapkeyts != "" {
+			meth = "mkt."
+		}
+		return fmt.Sprintf("%s%s()", meth, fname)
+	}
+
+	b := bytes.NewBuffer(nil)
+	p.Declare(b, "x", "", false)
+	h := sha1.New()
+	h.Write([]byte(valstr))
+	h.Write([]byte(b.String()))
+	if f.mapkeyts != "" {
+		h.Write([]byte(f.mapkeyts))
+	}
+	h.Write([]byte(b.String()))
+	bs := h.Sum(nil)
+	hashstr := fmt.Sprintf("%x", bs)
+	b.WriteString(hashstr)
+	tag := b.String()
+	fname, ok := s.genvalFuncs[tag]
+	if ok {
+		return mkInvoc(fname), value
+	}
+
+	fname = fmt.Sprintf("genval_%d", len(s.genvalFuncs))
+	s.newGenvalFuncs = append(s.newGenvalFuncs, funcdesc{p: p, name: fname, tag: tag, payload: valstr})
+	s.genvalFuncs[tag] = fname
+	return mkInvoc(fname), value
+}
+
 func (s *genstate) emitMapKeyTmps(f *funcdef, b *bytes.Buffer, pidx int, value int, caller bool) int {
 	if f.mapkeyts == "" {
 		return value
@@ -772,7 +829,7 @@ func (s *genstate) emitMapKeyTmps(f *funcdef, b *bytes.Buffer, pidx int, value i
 	b.WriteString("  var mkt " + cp + f.mapkeyts + "\n")
 	for i, t := range f.mapkeytypes {
 		var keystr string
-		keystr, value = t.GenValue(s, value, caller)
+		keystr, value = s.GenValue(f, t, value, caller)
 		tname := f.mapkeytmps[i]
 		b.WriteString(fmt.Sprintf("  %s := %s\n", tname, keystr))
 		b.WriteString(fmt.Sprintf("  mkt.%s = %s\n", tname, tname))
@@ -816,7 +873,7 @@ func (s *genstate) emitCaller(f *funcdef, b *bytes.Buffer, pidx int) {
 	if f.method {
 		s.wr.Checkpoint("before receiver constant")
 		f.receiver.Declare(b, "  var rcvr", "\n", true)
-		valstr, value := f.receiver.GenValue(s, value, true)
+		valstr, value := s.GenValue(f, f.receiver, value, true)
 		b.WriteString(fmt.Sprintf("  rcvr = %s\n", valstr))
 		f.values = append(f.values, value)
 	}
@@ -962,10 +1019,11 @@ func checkableElements(p parm) int {
 // that we don't have to emit multiple copies of a function that
 // assigns int to *int, for exampkle).
 type funcdesc struct {
-	p    parm
-	pp   parm
-	name string
-	tag  string
+	p       parm
+	pp      parm
+	name    string
+	tag     string
+	payload string
 }
 
 func (s *genstate) emitDerefFuncs(b *bytes.Buffer, emit bool) {
@@ -1048,12 +1106,45 @@ func (s *genstate) emitGlobalVars(b *bytes.Buffer, emit bool) {
 	b.WriteString("\n")
 }
 
-func (s *genstate) emitAddrTakenHelpers(b *bytes.Buffer, emit bool) {
+func (s *genstate) emitGenValFuncs(f *funcdef, b *bytes.Buffer, emit bool) {
+	b.WriteString("// genval helpers\n")
+	for _, fd := range s.newGenvalFuncs {
+		if !emit {
+			b.WriteString(fmt.Sprintf("\n// skip genvalfunc %s\n", fd.name))
+			delete(s.genvalFuncs, fd.tag)
+			continue
+		}
+		b.WriteString("\n//go:noinline\n")
+		rcvr := ""
+		if f.mapkeyts != "" {
+			rcvr = fmt.Sprintf("(mkt *%s) ", f.mapkeyts)
+		}
+		b.WriteString(fmt.Sprintf("func %s%s() ", rcvr, fd.name))
+		fd.p.Declare(b, "", "", false)
+		b.WriteString(" {\n")
+		if f.mapkeyts != "" {
+			contained := containedParms(fd.p)
+			for _, cp := range contained {
+				mp, ismap := cp.(*mapparm)
+				if ismap {
+					b.WriteString(fmt.Sprintf("  %s := mkt.%s\n",
+						mp.keytmp, mp.keytmp))
+				}
+			}
+		}
+		b.WriteString(fmt.Sprintf("  return %s\n", fd.payload))
+		b.WriteString("}\n")
+	}
+	s.newGenvalFuncs = nil
+}
+
+func (s *genstate) emitAddrTakenHelpers(f *funcdef, b *bytes.Buffer, emit bool) {
 	b.WriteString("// begin addr taken helpers\n")
 	s.emitDerefFuncs(b, emit)
 	s.emitAssignFuncs(b, emit)
 	s.emitNewFuncs(b, emit)
 	s.emitGlobalVars(b, emit)
+	s.emitGenValFuncs(f, b, emit)
 	b.WriteString("// end addr taken helpers\n")
 }
 
@@ -1188,7 +1279,7 @@ func (s *genstate) emitParamChecks(f *funcdef, b *bytes.Buffer, pidx int, value 
 			haveControl = true
 
 		} else if p.IsBlank() {
-			valstr, value = p.GenValue(s, value, false)
+			valstr, value = s.GenValue(f, p, value, false)
 			if f.recur {
 				b.WriteString(fmt.Sprintf("  brc%d := %s\n", pi, valstr))
 			} else {
@@ -1200,7 +1291,7 @@ func (s *genstate) emitParamChecks(f *funcdef, b *bytes.Buffer, pidx int, value 
 			for i := 0; i < numel; i++ {
 				verb(4, "emitting check-code for p%d el %d value=%d", pi, i, value)
 				elref, elparm := p.GenElemRef(i, s.genParamRef(p, pi))
-				valstr, value = elparm.GenValue(s, value, false)
+				valstr, value = s.GenValue(f, elparm, value, false)
 				if elref == "" || elref == "_" || cel == 0 {
 					b.WriteString(fmt.Sprintf("  // skip: %s\n", valstr))
 					continue
@@ -1234,7 +1325,7 @@ func (s *genstate) emitParamChecks(f *funcdef, b *bytes.Buffer, pidx int, value 
 		for i := 0; i < numel; i++ {
 			verb(4, "emitting check-code for rcvr el %d value=%d", i, value)
 			elref, elparm := f.receiver.GenElemRef(i, "rcvr")
-			valstr, value = elparm.GenValue(s, value, false)
+			valstr, value = s.GenValue(f, elparm, value, false)
 			if elref == "" || strings.HasPrefix(elref, "_") || f.receiver.IsBlank() {
 				verb(4, "empty skip rcvr el %d", i)
 				continue
@@ -1343,12 +1434,12 @@ func (s *genstate) emitVarAssign(f *funcdef, b *bytes.Buffer, r parm, rname stri
 	if rmp, ismap := r.(*mapparm); ismap && isassign {
 		// emit: var m ... ; m[k] = v
 		r.Declare(b, "  "+rname+" := make(", ")\n", caller)
-		valstr, value = rmp.valtype.GenValue(s, value, caller)
+		valstr, value = s.GenValue(f, rmp.valtype, value, caller)
 		b.WriteString(fmt.Sprintf("  %s[mkt.%s] = %s\n",
 			rname, rmp.keytmp, valstr))
 	} else {
 		// emit r = c
-		valstr, value = r.GenValue(s, value, caller)
+		valstr, value = s.GenValue(f, r, value, caller)
 		b.WriteString(fmt.Sprintf("  %s := %s\n", rname, valstr))
 	}
 	return value
@@ -1460,7 +1551,7 @@ func (s *genstate) emitChecker(f *funcdef, b *bytes.Buffer, pidx int, emit bool)
 	b.WriteString("}\n\n")
 
 	// emit any new helper funcs referenced by this test function
-	s.emitAddrTakenHelpers(b, emit)
+	s.emitAddrTakenHelpers(f, b, emit)
 }
 
 // complexityMeasure returns an integer that estimates how complex a given test function
@@ -1581,12 +1672,12 @@ func (s *genstate) GenPair(calloutfile *os.File, checkoutfile *os.File, fidx int
 	s.tunables = tunables
 
 	// Generate a function with a random number of params and returns
-	s.wr = NewWrapRand(seed, s.tracerand)
+	s.wr = NewWrapRand(seed, s.randctl)
 	s.wr.tag = "genfunc"
 	fp := s.GenFunc(fidx, pidx)
 
 	// Emit caller side
-	wrcaller := NewWrapRand(seed, s.tracerand)
+	wrcaller := NewWrapRand(seed, s.randctl)
 	s.wr = wrcaller
 	s.wr.tag = "caller"
 	s.emitCaller(fp, b, pidx)
@@ -1596,7 +1687,7 @@ func (s *genstate) GenPair(calloutfile *os.File, checkoutfile *os.File, fidx int
 	b.Reset()
 
 	// Emit checker side
-	wrchecker := NewWrapRand(seed, s.tracerand)
+	wrchecker := NewWrapRand(seed, s.randctl)
 	s.wr = wrchecker
 	s.wr.tag = "checker"
 	s.emitChecker(fp, b, pidx, emit)
@@ -1757,7 +1848,7 @@ func emitFP(fn int, pk int, fcnmask map[int]int, pkmask map[int]int) bool {
 	return doemit
 }
 
-func Generate(tag string, outdir string, pkgpath string, numit int, numtpkgs int, seed int64, pragma string, fcnmask map[int]int, pkmask map[int]int, utilsinl bool, maxfail int, forcestackgrowth bool, tracerand bool) int {
+func Generate(tag string, outdir string, pkgpath string, numit int, numtpkgs int, seed int64, pragma string, fcnmask map[int]int, pkmask map[int]int, utilsinl bool, maxfail int, forcestackgrowth bool, randctl int) int {
 	mainpkg := tag + "Main"
 
 	var ipref string
@@ -1766,13 +1857,13 @@ func Generate(tag string, outdir string, pkgpath string, numit int, numtpkgs int
 	}
 
 	s := genstate{
-		outdir:    outdir,
-		ipref:     ipref,
-		tag:       tag,
-		numtpk:    numtpkgs,
-		pragma:    pragma,
-		sforce:    forcestackgrowth,
-		tracerand: tracerand,
+		outdir:  outdir,
+		ipref:   ipref,
+		tag:     tag,
+		numtpk:  numtpkgs,
+		pragma:  pragma,
+		sforce:  forcestackgrowth,
+		randctl: randctl,
 	}
 
 	if outdir != "." {
@@ -1826,6 +1917,7 @@ func Generate(tag string, outdir string, pkgpath string, numit int, numtpkgs int
 		s.assignFuncs = make(map[string]string)
 		s.allocFuncs = make(map[string]string)
 		s.globVars = make(map[string]string)
+		s.genvalFuncs = make(map[string]string)
 
 		var b bytes.Buffer
 		for i := 0; i < numit; i++ {

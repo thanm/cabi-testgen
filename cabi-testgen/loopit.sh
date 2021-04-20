@@ -2,8 +2,8 @@
 #
 # Simple test script for performing a series of test runs.
 #
-DOCLOBBER=yes
-DOSETGOGC=yes
+DOCLOBBER=no
+DOSETGOGC=no
 DOMINIMIZE=no
 DOMINIMIZE=yes
 GEX=
@@ -50,10 +50,10 @@ SEED=`seconds.py`
 HERE=`pwd`
 PRAG=""
 PRAG="-pragma registerparams -method=1 -reflect=1 -maxfail=9999"
-#NP=10
-#NF=10
-NP=100
-NF=20
+NP=10
+NF=10
+#NP=100
+#NF=20
 while [ $ITER -lt ${HOWMANY} ]; do
   echo iter $ITER
   ITER=`expr $ITER + 1`

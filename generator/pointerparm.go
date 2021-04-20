@@ -12,6 +12,7 @@ type pointerparm struct {
 	totype parm
 	isBlank
 	addrTakenHow
+	isGenValFunc
 }
 
 func (p pointerparm) Declare(b *bytes.Buffer, prefix string, suffix string, caller bool) {
@@ -26,13 +27,13 @@ func (p pointerparm) GenElemRef(elidx int, path string) (string, parm) {
 	return path, &p
 }
 
-func (p pointerparm) GenValue(s *genstate, value int, caller bool) (string, int) {
+func (p pointerparm) GenValue(s *genstate, f *funcdef, value int, caller bool) (string, int) {
 	pref := ""
 	if caller {
 		pref = s.checkerPkg(s.pkidx) + "."
 	}
 	var valstr string
-	valstr, value = p.totype.GenValue(s, value, caller)
+	valstr, value = s.GenValue(f, p.totype, value, caller)
 	fname := s.genAllocFunc(p.totype)
 	return fmt.Sprintf("%s%s(%s)", pref, fname, valstr), value
 }

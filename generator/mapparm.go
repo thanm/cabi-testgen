@@ -15,6 +15,7 @@ type mapparm struct {
 	keytmp  string
 	isBlank
 	addrTakenHow
+	isGenValFunc
 }
 
 func (p mapparm) IsControl() bool {
@@ -42,7 +43,7 @@ func (p mapparm) String() string {
 		p.keytype.String(), p.valtype.String())
 }
 
-func (p mapparm) GenValue(s *genstate, value int, caller bool) (string, int) {
+func (p mapparm) GenValue(s *genstate, f *funcdef, value int, caller bool) (string, int) {
 	var buf bytes.Buffer
 
 	verb(5, "mapparm.GenValue(%d)", value)
@@ -55,7 +56,7 @@ func (p mapparm) GenValue(s *genstate, value int, caller bool) (string, int) {
 	buf.WriteString(p.keytmp + ": ")
 
 	var valstr string
-	valstr, value = p.valtype.GenValue(s, value, caller)
+	valstr, value = s.GenValue(f, p.valtype, value, caller)
 	buf.WriteString(valstr + "}")
 	return buf.String(), value
 }

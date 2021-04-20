@@ -14,6 +14,7 @@ type numparm struct {
 	ctl         bool
 	isBlank
 	addrTakenHow
+	isGenValFunc
 }
 
 var f32parm *numparm = &numparm{
@@ -126,7 +127,7 @@ func (p numparm) genRandNum(s *genstate, value int) (string, int) {
 	panic("unknown numeric type")
 }
 
-func (p numparm) GenValue(s *genstate, value int, caller bool) (string, int) {
+func (p numparm) GenValue(s *genstate, f *funcdef, value int, caller bool) (string, int) {
 	r, nv := p.genRandNum(s, value)
 	verb(5, "numparm.GenValue(%d) = %s", value, r)
 	return r, nv
