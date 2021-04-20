@@ -16,7 +16,7 @@ if [ -z "$HOWMANY" ]; then
   HOWMANY=1
 fi
 DOCLEANCACHE=no
-if [ $HOWMANY > 50 ]; then
+if [ $HOWMANY -gt 50 ]; then
   DOCLEANCACHE=yes
 fi
 GCFLAGS="-c=56"
