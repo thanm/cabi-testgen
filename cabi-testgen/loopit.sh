@@ -23,7 +23,7 @@ GCFLAGS="-c=56"
 GCFLAGS2="-c=1"
 if [ $DOCLOBBER = "yes" ]; then
   GCFLAGS="-c=56 -clobberdead"
-  GCFLAGS="-c=1 -clobberdead"
+  GCFLAGS2="-c=1 -clobberdead"
 fi
 if [ $DOSETGOGC = "yes" ]; then
   echo export GOGC=10
