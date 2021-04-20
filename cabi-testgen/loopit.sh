@@ -3,14 +3,14 @@
 # Simple test script for performing a series of test runs.
 #
 DOCLOBBER=no
-DOSETGOGC=no
+DOSETGOGC=yes
 DOMINIMIZE=no
 DOMINIMIZE=yes
-GEX=
-GEX=regabi,regabiargs
-GEX=regabi,regabireflect,regabiargs
-echo export GOEXPERIMENT=$GEX
-export GOEXPERIMENT=$GEX
+#GEX=regabi,regabiargs
+#GEX=regabi,regabireflect,regabiargs
+#GEX=
+#echo export GOEXPERIMENT=$GEX
+#export GOEXPERIMENT=$GEX
 HOWMANY=$1
 if [ -z "$HOWMANY" ]; then
   HOWMANY=1
@@ -52,8 +52,8 @@ PRAG=""
 PRAG="-pragma registerparams -method=1 -reflect=1 -maxfail=9999"
 NP=10
 NF=10
-#NP=100
-#NF=20
+NP=100
+NF=20
 while [ $ITER -lt ${HOWMANY} ]; do
   echo iter $ITER
   ITER=`expr $ITER + 1`
@@ -156,9 +156,15 @@ while [ $ITER -lt ${HOWMANY} ]; do
     fi
     exit 1
   fi
+  if [ $DOSETGOGC = "yes" ]; then
+    echo export GOGC=10
+    export GOGC=10
+  fi
   echo "... running"
   ./cabiTest 1> ${HERE}/run.err.txt 2>&1
-  if [ $? != 0 ]; then
+  RC=$?
+  export GOGC=
+  if [ $RC != 0 ]; then
     cd $HERE
     head run.err.txt
     PIPE="|"

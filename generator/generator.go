@@ -841,7 +841,7 @@ func (s *genstate) emitCaller(f *funcdef, b *bytes.Buffer, pidx int) {
 
 	b.WriteString(fmt.Sprintf("func Caller%d(mode string) {\n", f.idx))
 
-	b.WriteString(fmt.Sprintf("  %s.BeginFcn()\n", s.utilsPkg()))
+	b.WriteString(fmt.Sprintf("  %s.BeginFcn(%d)\n", s.utilsPkg(), pidx))
 
 	var value int = 1
 
@@ -878,7 +878,7 @@ func (s *genstate) emitCaller(f *funcdef, b *bytes.Buffer, pidx int) {
 		f.values = append(f.values, value)
 	}
 
-	b.WriteString(fmt.Sprintf("  %s.Mode = \"\"\n", s.utilsPkg()))
+	b.WriteString(fmt.Sprintf("  %s.Mode[%d] = \"\"\n", s.utilsPkg(), pidx))
 
 	// calling code
 	b.WriteString(fmt.Sprintf("  // %d returns %d params\n",
@@ -918,7 +918,7 @@ func (s *genstate) emitCaller(f *funcdef, b *bytes.Buffer, pidx int) {
 			continue
 		}
 		if star != "" {
-			pfc = fmt.Sprintf("%s.ParamFailCount == 0 && ", s.utilsPkg())
+			pfc = fmt.Sprintf("%s.ParamFailCount[%d] == 0 && ", s.utilsPkg(), pidx)
 		}
 		if curp.HasPointer() {
 			efn := "!" + s.eqFuncRef(f, curp, true)
@@ -934,7 +934,7 @@ func (s *genstate) emitCaller(f *funcdef, b *bytes.Buffer, pidx int) {
 		b.WriteString("else {\n")
 		// now make the same call via reflection
 		b.WriteString("  // same call via reflection\n")
-		b.WriteString(fmt.Sprintf("  %s.Mode = \"reflect\"\n", s.utilsPkg()))
+		b.WriteString(fmt.Sprintf("  %s.Mode[%d] = \"reflect\"\n", s.utilsPkg(), pidx))
 		if f.method {
 			b.WriteString("  rcv := reflect.ValueOf(rcvr)\n")
 			b.WriteString(fmt.Sprintf("  rc := rcv.MethodByName(\"Test%d\")\n", f.idx))
@@ -969,7 +969,7 @@ func (s *genstate) emitCaller(f *funcdef, b *bytes.Buffer, pidx int) {
 				continue
 			}
 			if star != "" {
-				pfc = fmt.Sprintf("%s.ParamFailCount == 0 && ", s.utilsPkg())
+				pfc = fmt.Sprintf("%s.ParamFailCount[%d] == 0 && ", s.utilsPkg(), pidx)
 			}
 			if curp.HasPointer() {
 				efn := "!" + s.eqFuncRef(f, curp, true)
@@ -983,7 +983,7 @@ func (s *genstate) emitCaller(f *funcdef, b *bytes.Buffer, pidx int) {
 		b.WriteString("}\n")
 	}
 
-	b.WriteString(fmt.Sprintf("\n  %s.EndFcn()\n", s.utilsPkg()))
+	b.WriteString(fmt.Sprintf("\n  %s.EndFcn(%d)\n", s.utilsPkg(), pidx))
 
 	b.WriteString("}\n\n")
 }
@@ -1129,6 +1129,7 @@ func (s *genstate) emitGenValFuncs(f *funcdef, b *bytes.Buffer, emit bool) {
 				if ismap {
 					b.WriteString(fmt.Sprintf("  %s := mkt.%s\n",
 						mp.keytmp, mp.keytmp))
+					b.WriteString(fmt.Sprintf("  _ = %s\n", mp.keytmp))
 				}
 			}
 		}
@@ -1497,7 +1498,7 @@ func (s *genstate) emitChecker(f *funcdef, b *bytes.Buffer, pidx int, emit bool)
 	// local storage
 	b.WriteString("  // consume some stack space, so as to trigger morestack\n")
 	b.WriteString(fmt.Sprintf("  var pad [%d]uint64\n", f.rstack))
-	b.WriteString(fmt.Sprintf("  pad[%s.FailCount&0x1]++\n", s.utilsPkg()))
+	b.WriteString(fmt.Sprintf("  pad[%s.FailCount[%d] & 0x1]++\n", s.utilsPkg(), pidx))
 
 	value := 1
 
@@ -1729,30 +1730,30 @@ func (s *genstate) openOutputFile(filename string, pk string, imports []string, 
 	return outf
 }
 
-func emitUtils(outf *os.File, maxfail int) {
+func emitUtils(outf *os.File, maxfail int, numtpk int) {
 	countfail := `
   if isret {
-    if ParamFailCount != 0 {
+    if ParamFailCount[pidx] != 0 {
       return
     }
-    ReturnFailCount++
+    ReturnFailCount[pidx]++
   } else {
-    ParamFailCount++
+    ParamFailCount[pidx]++
   }
 `
 	earlyexit := fmt.Sprintf(`
-  if (ParamFailCount + FailCount + ReturnFailCount > %d) {
+  if (ParamFailCount[pidx] + FailCount[pidx] + ReturnFailCount[pidx] > %d) {
     os.Exit(1)
   }
 `, maxfail)
 
 	fmt.Fprintf(outf, "import \"fmt\"\n")
 	fmt.Fprintf(outf, "import \"os\"\n\n")
-	fmt.Fprintf(outf, "var ParamFailCount int\n\n")
-	fmt.Fprintf(outf, "var ReturnFailCount int\n\n")
-	fmt.Fprintf(outf, "var FailCount int\n\n")
-	fmt.Fprintf(outf, "var Mode string\n\n")
-	fmt.Fprintf(outf, "type UtilsType int\n\n")
+	fmt.Fprintf(outf, "type UtilsType int\n")
+	fmt.Fprintf(outf, "var ParamFailCount[%d] int\n", numtpk)
+	fmt.Fprintf(outf, "var ReturnFailCount[%d] int\n", numtpk)
+	fmt.Fprintf(outf, "var FailCount[%d] int\n\n", numtpk)
+	fmt.Fprintf(outf, "var Mode[%d] string\n\n", numtpk)
 	fmt.Fprintf(outf, "//go:noinline\n")
 	fmt.Fprintf(outf, "func NoteFailure(cm int, pidx int, fidx int, pkg string, pref string, parmNo int, isret bool,_ uint64) {")
 	outf.WriteString(countfail)
@@ -1767,34 +1768,45 @@ func emitUtils(outf *os.File, maxfail int) {
 	fmt.Fprintf(outf, "\"Error: fail %%s |%%d|%%d|%%d| =%%s.Test%%d= %%s %%d elem %%d\\n\", Mode, cm, pidx, fidx, pkg, fidx, pref, parmNo, elem)\n")
 	outf.WriteString(earlyexit)
 	fmt.Fprintf(outf, "}\n\n")
-	fmt.Fprintf(outf, "func BeginFcn() {\n")
-	fmt.Fprintf(outf, "  ParamFailCount = 0\n")
-	fmt.Fprintf(outf, "  ReturnFailCount = 0\n")
+	fmt.Fprintf(outf, "func BeginFcn(p int) {\n")
+	fmt.Fprintf(outf, "  ParamFailCount[p] = 0\n")
+	fmt.Fprintf(outf, "  ReturnFailCount[p] = 0\n")
 	fmt.Fprintf(outf, "}\n\n")
-	fmt.Fprintf(outf, "func EndFcn() {\n")
-	fmt.Fprintf(outf, "  FailCount += ParamFailCount\n")
-	fmt.Fprintf(outf, "  FailCount += ReturnFailCount\n")
+	fmt.Fprintf(outf, "func EndFcn(p int) {\n")
+	fmt.Fprintf(outf, "  FailCount[p] += ParamFailCount[p]\n")
+	fmt.Fprintf(outf, "  FailCount[p] += ReturnFailCount[p]\n")
 	fmt.Fprintf(outf, "}\n\n")
 }
 
-func (s *genstate) emitMain(outf *os.File, numit int, fcnmask map[int]int, pkmask map[int]int) {
+func (s *genstate) emitMain(outf *os.File, numit int, fcnmask map[int]int, pkmask map[int]int, numtpk int) {
 	fmt.Fprintf(outf, "import \"fmt\"\n")
 	fmt.Fprintf(outf, "import \"os\"\n\n")
 	fmt.Fprintf(outf, "func main() {\n")
 	fmt.Fprintf(outf, "  fmt.Fprintf(os.Stderr, \"starting main\\n\")\n")
+	fmt.Fprintf(outf, "  pch := make(chan bool, %d)\n", numtpk)
 	for k := 0; k < s.numtpk; k++ {
 		cp := fmt.Sprintf("%sCaller%d", s.tag, k)
+		fmt.Fprintf(outf, "  go func(ch chan bool) {\n")
 		for i := 0; i < numit; i++ {
 			if emitFP(i, k, fcnmask, pkmask) {
-				fmt.Fprintf(outf, "  %s.Caller%d(\"normal\")\n", cp, i)
+				fmt.Fprintf(outf, "    %s.Caller%d(\"normal\")\n", cp, i)
 				if s.tunables.doReflectCall {
-					fmt.Fprintf(outf, "  %s.Caller%d(\"reflect\")\n", cp, i)
+					fmt.Fprintf(outf, "    %s.Caller%d(\"reflect\")\n", cp, i)
 				}
 			}
 		}
+		fmt.Fprintf(outf, "    pch <- true\n")
+		fmt.Fprintf(outf, "  }(pch)\n")
 	}
-	fmt.Fprintf(outf, "  if %s.FailCount != 0 {\n", s.utilsPkg())
-	fmt.Fprintf(outf, "    fmt.Fprintf(os.Stderr, \"FAILURES: %%d\\n\", %s.FailCount)\n", s.utilsPkg())
+	fmt.Fprintf(outf, "  for pidx := 0; pidx < %d; pidx++ {\n", numtpk)
+	fmt.Fprintf(outf, "    _ = <- pch\n")
+	fmt.Fprintf(outf, "  }\n")
+	fmt.Fprintf(outf, "  tf := 0\n")
+	fmt.Fprintf(outf, "  for pidx := 0; pidx < %d; pidx++ {\n", numtpk)
+	fmt.Fprintf(outf, "    tf += %s.FailCount[pidx]\n", s.utilsPkg())
+	fmt.Fprintf(outf, "  }\n")
+	fmt.Fprintf(outf, "  if tf != 0 {\n")
+	fmt.Fprintf(outf, "    fmt.Fprintf(os.Stderr, \"FAILURES: %%d\\n\", tf)\n")
 	fmt.Fprintf(outf, "    os.Exit(2)\n")
 	fmt.Fprintf(outf, "  }\n")
 	fmt.Fprintf(outf, "  fmt.Fprintf(os.Stderr, \"finished %d tests\\n\")\n", numit*s.numtpk)
@@ -1885,7 +1897,7 @@ func Generate(tag string, outdir string, pkgpath string, numit int, numtpkgs int
 	utilsfile := outdir + "/" + s.utilsPkg() + "/" + s.utilsPkg() + ".go"
 	utilsoutfile := s.openOutputFile(utilsfile, s.utilsPkg(), []string{}, "")
 	verb(1, "emit utils")
-	emitUtils(utilsoutfile, maxfail)
+	emitUtils(utilsoutfile, maxfail, numtpkgs)
 	utilsoutfile.Close()
 
 	mainfile := outdir + "/" + mainpkg + ".go"
@@ -1933,7 +1945,7 @@ func Generate(tag string, outdir string, pkgpath string, numit int, numtpkgs int
 		calleroutfile.Close()
 		checkeroutfile.Close()
 	}
-	s.emitMain(mainoutfile, numit, fcnmask, pkmask)
+	s.emitMain(mainoutfile, numit, fcnmask, pkmask, numtpkgs)
 
 	// emit go.mod
 	verb(1, "opening go.mod")
