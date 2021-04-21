@@ -19,15 +19,11 @@ DOCLEANCACHE=no
 if [ $HOWMANY -gt 50 ]; then
   DOCLEANCACHE=yes
 fi
-GCFLAGS="-c=56"
+GCFLAGS="-c=4"
 GCFLAGS2="-c=1"
 if [ $DOCLOBBER = "yes" ]; then
-  GCFLAGS="-c=56 -clobberdead"
+  GCFLAGS="-c=4 -clobberdead"
   GCFLAGS2="-c=1 -clobberdead"
-fi
-if [ $DOSETGOGC = "yes" ]; then
-  echo export GOGC=10
-  export GOGC=10
 fi
 ITER=0
 go build .
@@ -80,7 +76,7 @@ while [ $ITER -lt ${HOWMANY} ]; do
   rm -f cabiTest
   echo "... building"
   set -x
-  go build -gcflags=all="$GCFLAGS" . 1> ${HERE}/build.err.txt 2>&1
+  go build -p=50 -gcflags=all="$GCFLAGS" . 1> ${HERE}/build.err.txt 2>&1
   RC=$?
   set +x
   if [ $RC != 0 ]; then
@@ -89,7 +85,6 @@ while [ $ITER -lt ${HOWMANY} ]; do
       exit 1
     fi
     echo "... serial build"
-    
     go build -p=1 -gcflags=all="$GCFLAGS2" -p 1 . 1> ${HERE}/build.err.txt 2>&1
     echo "*** now trying to minimize by package"
     mv /tmp/cabiTest /tmp/cabiTest.orig
