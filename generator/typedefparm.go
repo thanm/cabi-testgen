@@ -14,6 +14,7 @@ type typedefparm struct {
 	isBlank
 	addrTakenHow
 	isGenValFunc
+	skipCompare
 }
 
 func (p typedefparm) Declare(b *bytes.Buffer, prefix string, suffix string, caller bool) {

@@ -125,6 +125,7 @@ func TestExhaustive(t *testing.T) {
 				tunables.doDefer = false
 				tunables.takeAddress = false
 				tunables.doFuncCallValues = false
+				tunables.doSkipCompare = false
 				checkTunables(tunables)
 			},
 		},
@@ -178,6 +179,13 @@ func TestExhaustive(t *testing.T) {
 			"addfuncval",
 			func() {
 				tunables.doFuncCallValues = true
+				checkTunables(tunables)
+			},
+		},
+		{
+			"addfuncval",
+			func() {
+				tunables.doSkipCompare = true
 				checkTunables(tunables)
 			},
 		},

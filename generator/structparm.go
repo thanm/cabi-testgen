@@ -15,6 +15,7 @@ type structparm struct {
 	isBlank
 	addrTakenHow
 	isGenValFunc
+	skipCompare
 }
 
 func (p structparm) TypeName() string {

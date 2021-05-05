@@ -16,6 +16,7 @@ type mapparm struct {
 	isBlank
 	addrTakenHow
 	isGenValFunc
+	skipCompare
 }
 
 func (p mapparm) IsControl() bool {

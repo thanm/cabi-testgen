@@ -24,6 +24,8 @@ type parm interface {
 	SetAddrTaken(val addrTakenHow)
 	IsGenVal() bool
 	SetIsGenVal(val bool)
+	SkipCompare() skipCompare
+	SetSkipCompare(val skipCompare)
 }
 
 type addrTakenHow uint8
@@ -62,12 +64,29 @@ func (b *isBlank) SetBlank(val bool) {
 
 type isGenValFunc bool
 
-func (b *isGenValFunc) IsGenVal() bool {
-	return bool(*b)
+func (g *isGenValFunc) IsGenVal() bool {
+	return bool(*g)
 }
 
 func (g *isGenValFunc) SetIsGenVal(val bool) {
 	*g = isGenValFunc(val)
+}
+
+type skipCompare int
+
+const (
+	// Param not address taken.
+	SkipAll     = -1
+	SkipNone    = 0
+	SkipPayload = 1
+)
+
+func (s *skipCompare) SkipCompare() skipCompare {
+	return skipCompare(*s)
+}
+
+func (s *skipCompare) SetSkipCompare(val skipCompare) {
+	*s = skipCompare(val)
 }
 
 // containedParms takes an arbitrary param 'p' and returns a slice

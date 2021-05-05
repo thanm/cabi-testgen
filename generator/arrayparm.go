@@ -16,6 +16,7 @@ type arrayparm struct {
 	isBlank
 	addrTakenHow
 	isGenValFunc
+	skipCompare
 }
 
 func (p arrayparm) IsControl() bool {

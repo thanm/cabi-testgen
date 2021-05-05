@@ -15,6 +15,7 @@ type numparm struct {
 	isBlank
 	addrTakenHow
 	isGenValFunc
+	skipCompare
 }
 
 var f32parm *numparm = &numparm{

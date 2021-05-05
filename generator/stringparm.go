@@ -11,6 +11,7 @@ type stringparm struct {
 	isBlank
 	addrTakenHow
 	isGenValFunc
+	skipCompare
 }
 
 func (p stringparm) Declare(b *bytes.Buffer, prefix string, suffix string, caller bool) {

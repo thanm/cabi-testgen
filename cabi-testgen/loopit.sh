@@ -5,9 +5,6 @@
 DOCLOBBER=no
 DOSETGOGC=yes
 DOMINIMIZE=no
-DOMINIMIZE=yes
-#GEX=regabi,regabiargs
-#GEX=regabi,regabireflect,regabiargs
 #GEX=
 #echo export GOEXPERIMENT=$GEX
 #export GOEXPERIMENT=$GEX
@@ -44,8 +41,7 @@ function cleanUnused() {
 }
 SEED=`seconds.py`
 HERE=`pwd`
-PRAG=""
-PRAG="-pragma registerparams -method=1 -reflect=1 -maxfail=9999"
+PRAG="-maxfail=9999"
 NP=10
 NF=10
 NP=100
@@ -152,8 +148,8 @@ while [ $ITER -lt ${HOWMANY} ]; do
     exit 1
   fi
   if [ $DOSETGOGC = "yes" ]; then
-    echo export GOGC=10
-    export GOGC=10
+    echo export GOGC=1
+    export GOGC=1
   fi
   echo "... running"
   ./cabiTest 1> ${HERE}/run.err.txt 2>&1

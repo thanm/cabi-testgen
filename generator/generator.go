@@ -93,6 +93,15 @@ type TunableParams struct {
 	// Fraction of the time that we emit a function call to create
 	// a param value vs emitting a literal.
 	funcCallValFraction uint8
+
+	// If true, randomly decide to not check selected components of
+	// a composite value (e.g. for a struct, check field F1 but not F2).
+	// The intent is to generate partially live values.
+	doSkipCompare bool
+
+	// Fraction of the time that we decided to skip sub-components of
+	// composite values
+	skipCompareFraction uint8
 }
 
 var defaultTypeFractions = [9]uint8{
@@ -144,6 +153,8 @@ var tunables = TunableParams{
 	takenFraction:         20,
 	deferFraction:         30,
 	funcCallValFraction:   5,
+	doSkipCompare:         true,
+	skipCompareFraction:   10,
 	addrFractions:         [4]uint8{50, 25, 15, 10},
 }
 
@@ -213,6 +224,9 @@ func checkTunables(t TunableParams) {
 	}
 	if t.sliceFraction > 100 {
 		log.Fatal(errors.New("sliceFraction not between 0 and 100"))
+	}
+	if t.skipCompareFraction > 100 {
+		log.Fatal(errors.New("skipCompareFraction not between 0 and 100"))
 	}
 }
 
@@ -494,6 +508,11 @@ func (s *genstate) GenParm(f *funcdef, depth int, mkctl bool, pidx int) parm {
 			nf := s.wr.Intn(tnf)
 			for fi := 0; fi < nf; fi++ {
 				fp := s.GenParm(f, depth+1, false, pidx)
+				skComp := tunables.doSkipCompare &&
+					uint8(s.wr.Intn(100)) < s.tunables.skipCompareFraction
+				if skComp && checkableElements(fp) != 0 {
+					fp.SetSkipCompare(SkipAll)
+				}
 				sp.fields = append(sp.fields, fp)
 			}
 			f.structdefs[ns] = sp
@@ -516,6 +535,13 @@ func (s *genstate) GenParm(f *funcdef, depth int, mkctl bool, pidx int) parm {
 			ap.slice = issl
 			ap.eltype = s.GenParm(f, depth+1, false, pidx)
 			ap.eltype.SetBlank(false)
+			skComp := tunables.doSkipCompare &&
+				uint8(s.wr.Intn(100)) < s.tunables.skipCompareFraction
+			if skComp && checkableElements(ap.eltype) != 0 {
+				if issl {
+					ap.SetSkipCompare(SkipPayload)
+				}
+			}
 			f.arraydefs[ns] = ap
 			retval = &ap
 		}
@@ -593,6 +619,11 @@ func (s *genstate) GenParm(f *funcdef, depth int, mkctl bool, pidx int) parm {
 		{
 			var sp stringparm
 			sp.tag = "string"
+			skComp := tunables.doSkipCompare &&
+				uint8(s.wr.Intn(100)) < s.tunables.skipCompareFraction
+			if skComp {
+				sp.SetSkipCompare(SkipPayload)
+			}
 			retval = &sp
 		}
 	default:
@@ -1246,16 +1277,32 @@ func (s *genstate) genReturnAssign(b *bytes.Buffer, r parm, idx int, val string)
 }
 
 func (s *genstate) emitParamElemCheck(f *funcdef, b *bytes.Buffer, p parm, pvar string, cvar string, paramidx int, elemidx int) {
-	basep, star := genDeref(p)
-	// Handle *p where p is an empty struct.
-	if basep.NumElements() == 0 {
+	if p.SkipCompare() == SkipAll {
+		b.WriteString(fmt.Sprintf("  // selective skip of %s\n", pvar))
+		b.WriteString(fmt.Sprintf("  _ = %s\n", cvar))
 		return
-	}
-	if basep.HasPointer() {
-		efn := s.eqFuncRef(f, basep, false)
-		b.WriteString(fmt.Sprintf("  if !%s(%s%s, %s%s) {\n", efn, star, pvar, star, cvar))
+	} else if p.SkipCompare() == SkipPayload {
+		switch p.(type) {
+		case *stringparm, *arrayparm:
+			b.WriteString(fmt.Sprintf("  if len(%s) != len(%s) { // skip payload\n",
+				pvar, cvar))
+		default:
+			panic("should never happen")
+		}
 	} else {
-		b.WriteString(fmt.Sprintf("  if %s%s != %s%s {\n", star, pvar, star, cvar))
+		basep, star := genDeref(p)
+		// Handle *p where p is an empty struct.
+		if basep.NumElements() == 0 {
+			return
+		}
+		if basep.HasPointer() {
+			efn := s.eqFuncRef(f, basep, false)
+			b.WriteString(fmt.Sprintf("  if !%s(%s%s, %s%s) {\n",
+				efn, star, pvar, star, cvar))
+		} else {
+			b.WriteString(fmt.Sprintf("  if %s%s != %s%s {\n",
+				star, pvar, star, cvar))
+		}
 	}
 	cm := f.complexityMeasure()
 	b.WriteString(fmt.Sprintf("    %s.NoteFailureElem(%d, %d, %d, \"%s\", \"parm\", %d, %d, false, pad[0])\n", s.utilsPkg(), cm, s.pkidx, f.idx, s.checkerPkg(s.pkidx), paramidx, elemidx))
@@ -1294,7 +1341,7 @@ func (s *genstate) emitParamChecks(f *funcdef, b *bytes.Buffer, pidx int, value 
 				elref, elparm := p.GenElemRef(i, s.genParamRef(p, pi))
 				valstr, value = s.GenValue(f, elparm, value, false)
 				if elref == "" || elref == "_" || cel == 0 {
-					b.WriteString(fmt.Sprintf("  // skip: %s\n", valstr))
+					b.WriteString(fmt.Sprintf("  // blank skip: %s\n", valstr))
 					continue
 				} else {
 					basep, _ := genDeref(elparm)

@@ -13,6 +13,7 @@ type pointerparm struct {
 	isBlank
 	addrTakenHow
 	isGenValFunc
+	skipCompare
 }
 
 func (p pointerparm) Declare(b *bytes.Buffer, prefix string, suffix string, caller bool) {
