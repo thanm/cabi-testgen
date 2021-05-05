@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 )
@@ -1887,6 +1888,19 @@ func (s *genstate) utilsPkg() string {
 	return s.tag + "Utils"
 }
 
+func runImports(files []string) {
+	verb(1, "... running goimports")
+	args := make([]string, 0, len(files)+1)
+	args = append(args, "-w")
+	args = append(args, files...)
+	cmd := exec.Command("goimports", args...)
+	coutput, cerr := cmd.CombinedOutput()
+	if cerr != nil {
+		log.Fatalf("goimports command failed: %s", string(coutput))
+	}
+	verb(1, "... goimports run complete")
+}
+
 func emitFP(fn int, pk int, fcnmask map[int]int, pkmask map[int]int) bool {
 	emitpk := true
 	emitfn := true
@@ -1907,7 +1921,7 @@ func emitFP(fn int, pk int, fcnmask map[int]int, pkmask map[int]int) bool {
 	return doemit
 }
 
-func Generate(tag string, outdir string, pkgpath string, numit int, numtpkgs int, seed int64, pragma string, fcnmask map[int]int, pkmask map[int]int, utilsinl bool, maxfail int, forcestackgrowth bool, randctl int) int {
+func Generate(tag string, outdir string, pkgpath string, numit int, numtpkgs int, seed int64, pragma string, fcnmask map[int]int, pkmask map[int]int, utilsinl bool, maxfail int, forcestackgrowth bool, randctl int, goimpflag bool) int {
 	mainpkg := tag + "Main"
 
 	var ipref string
@@ -1950,6 +1964,7 @@ func Generate(tag string, outdir string, pkgpath string, numit int, numtpkgs int
 	mainfile := outdir + "/" + mainpkg + ".go"
 	mainoutfile := s.openOutputFile(mainfile, "main", mainimports, ipref)
 
+	allfiles := []string{mainfile, utilsfile}
 	for k := 0; k < numtpkgs; k++ {
 		callerImports := []string{s.checkerPkg(k), s.utilsPkg()}
 		checkerImports := []string{s.utilsPkg()}
@@ -1966,6 +1981,7 @@ func Generate(tag string, outdir string, pkgpath string, numit int, numtpkgs int
 				callerImports, ipref)
 			checkeroutfile = s.openOutputFile(s.checkerFile(k), s.checkerPkg(k),
 				checkerImports, ipref)
+			allfiles = append(allfiles, s.callerFile(k), s.checkerFile(k))
 		}
 
 		s.pkidx = k
@@ -2006,5 +2022,10 @@ func Generate(tag string, outdir string, pkgpath string, numit int, numtpkgs int
 
 	verb(1, "closing files")
 	mainoutfile.Close()
+
+	if s.errs == 0 && goimpflag {
+		runImports(allfiles)
+	}
+
 	return s.errs
 }

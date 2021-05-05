@@ -82,7 +82,7 @@ func TestIsBuildable(t *testing.T) {
 
 	checkTunables(tunables)
 	pack := filepath.Base(td)
-	errs := Generate("x", td, pack, 10, 10, int64(0), "", nil, nil, false, 10, false, RandCtlChecks|RandCtlPanic)
+	errs := Generate("x", td, pack, 10, 10, int64(0), "", nil, nil, false, 10, false, RandCtlChecks|RandCtlPanic, false)
 	if errs != 0 {
 		t.Errorf("%d errors during Generate", errs)
 	}
@@ -197,7 +197,7 @@ func TestExhaustive(t *testing.T) {
 		s.adjuster()
 		os.RemoveAll(td)
 		pack := filepath.Base(td)
-		errs := Generate("x", td, pack, 10, 10, int64(i+9), "", nil, nil, false, 10, false, RandCtlChecks|RandCtlPanic)
+		errs := Generate("x", td, pack, 10, 10, int64(i+9), "", nil, nil, false, 10, false, RandCtlChecks|RandCtlPanic, false)
 		if errs != 0 {
 			t.Errorf("%d errors during scenarios %q Generate", errs, s.name)
 		}

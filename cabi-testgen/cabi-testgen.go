@@ -31,6 +31,7 @@ var deferflag = flag.Bool("defer", true, "Include testing of defer stmts.")
 var recurflag = flag.Bool("recur", true, "Include testing of recursive calls.")
 var takeaddrflag = flag.Bool("takeaddr", true, "Include functions that take the address of their parameters and results.")
 var methodflag = flag.Bool("method", true, "Include testing of method calls.")
+var goimpflag = flag.Bool("goimports", false, "Run 'goimports' on generated code.")
 var inlimitflag = flag.Int("inmax", -1, "Max number of input params.")
 var outlimitflag = flag.Int("outmax", -1, "Max number of input params.")
 var pragmaflag = flag.String("pragma", "", "Tag generated test routines with pragma //go:<value>.")
@@ -144,7 +145,7 @@ func main() {
 	errs := generator.Generate(*tagflag, *outdirflag, *pkgpathflag,
 		*numitflag, *numtpkflag, *seedflag, *pragmaflag,
 		fcnmask, pkmask, *utilsinlineflag, *maxfailflag, *stackforceflag,
-		*randctlflag)
+		*randctlflag, *goimpflag)
 	if errs != 0 {
 		log.Fatal("errors during generation")
 	}
