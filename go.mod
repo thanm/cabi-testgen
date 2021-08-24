@@ -1,3 +1,3 @@
 module github.com/thanm/cabi-testgen
 
-go 1.9
+go 1.17
